@@ -8,10 +8,17 @@
     "gpt-web-port": "./src/cli.ts"
   },
   "scripts": {
-    "start": "bun run src/cli.ts serve",
+    "start": "bun run --cwd launcher start",
+    "app": "bun run --cwd launcher start",
+    "dev": "bun run --cwd launcher dev",
+    "serve": "bun run src/cli.ts serve",
     "login": "bun run src/cli.ts login",
     "ask": "bun run src/cli.ts ask",
-    "typecheck": "bun x --no-install --bun tsc --noEmit"
+    "ui": "bun run src/cli.ts serve",
+    "typecheck": "bun x --no-install --bun tsc --noEmit",
+    "launcher:install": "bun install --cwd launcher",
+    "package:win": "bun run --cwd launcher package:win",
+    "dist": "bun run --cwd launcher dist"
   },
   "dependencies": {
     "playwright-core": "^1.62.0"
