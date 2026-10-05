@@ -1,6 +1,14 @@
 node_modules/
 dist/
+build/
+launcher/release/
+launcher/dist/
+# 打包產出的安裝檔不進倉庫，改放 GitHub Release（手動上傳）
+ChatDock-*.exe
 .DS_Store
 .env
 *.log
 *.pid
+*.spec
+__pycache__/
+app/icon.ico

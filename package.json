@@ -1,8 +1,8 @@
 {
-  "name": "gpt-web-port",
+  "name": "chatdock",
   "version": "0.1.0",
   "private": true,
-  "description": "把 ChatGPT 網頁版包成一個本機 HTTP 埠：丟 prompt 進去，拿回 GPT 回覆。",
+  "description": "ChatDock：把 ChatGPT 網頁版接進本機（內嵌登入頁＋自動丟收＋HTTP/OpenAI 相容）。",
   "type": "module",
   "bin": {
     "gpt-web-port": "./src/cli.ts"
