@@ -3,7 +3,7 @@
 // - 左邊控制面板，右邊內嵌 ChatGPT 登入頁（同一個 partition，登入態共用）。
 // - 自動化（丟資料/接回傳）直接驅動內嵌頁面，不開外部瀏覽器。
 // - 照樣開 HTTP（POST /chat、OpenAI 相容），舊腳本不用改。
-const { app, BrowserWindow, WebContentsView, ipcMain, session, nativeTheme } = require("electron");
+const { app, BrowserWindow, WebContentsView, ipcMain, session, nativeTheme, Tray, Menu, nativeImage } = require("electron");
 const http = require("node:http");
 const path = require("node:path");
 const auto = require("./automation.cjs");
@@ -29,6 +29,48 @@ let chatView = null;
 let chatReady = null; // 內嵌頁首次載入完成的 promise
 let loginVisible = true;
 let queue = Promise.resolve();
+let tray = null;
+let quitting = false; // 只有從托盤選單「結束」或 CmdQ 才真正退出
+let hideNotified = false;
+
+// 同一個應用只跑一份：重複啟動時把舊視窗叫出來，避免 PORT 衝突。
+const singleInstance = app.requestSingleInstanceLock();
+if (!singleInstance) {
+  app.quit();
+}
+
+function showMainWindow() {
+  if (!mainWin) return;
+  if (!mainWin.isVisible()) mainWin.show();
+  if (mainWin.isMinimized()) mainWin.restore();
+  mainWin.focus();
+}
+
+function createTray() {
+  if (tray) return;
+  try {
+    const icon = nativeImage.createFromPath(path.join(__dirname, "tray.png"));
+    tray = new Tray(icon.isEmpty() ? undefined : icon);
+  } catch {
+    return; // 沒有圖示就不建托盤，不影響主流程
+  }
+  tray.setToolTip("ChatDock（HTTP 服務中，關閉視窗會收到托盤繼續跑）");
+  const menu = Menu.buildFromTemplate([
+    { label: "開啟 ChatDock", click: () => showMainWindow() },
+    { type: "separator" },
+    {
+      label: "結束", click: () => {
+        quitting = true;
+        app.quit();
+      },
+    },
+  ]);
+  tray.setContextMenu(menu);
+  tray.on("click", () => {
+    if (mainWin && mainWin.isVisible()) mainWin.hide();
+    else showMainWindow();
+  });
+}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -412,6 +454,7 @@ async function createWindow() {
     title: "ChatDock",
     autoHideMenuBar: true,
     backgroundColor: "#09090b",
+    icon: path.join(__dirname, "tray.png"),
   });
 
   // 確保同一個持久 partition（登入態跟上游一樣留在應用裡）
@@ -469,10 +512,33 @@ async function createWindow() {
     return { ok: true };
   });
 
+  // 按 X 不結束：收到托盤繼續跑 HTTP，這樣沒開視窗也能送出。
+  mainWin.on("close", (e) => {
+    if (quitting) return;
+    e.preventDefault();
+    mainWin.hide();
+    if (tray && !hideNotified) {
+      hideNotified = true;
+      tray.displayBalloon({
+        title: "ChatDock 還在跑",
+        content: "已收到右下角托盤，HTTP 照常服務；要完全結束請按托盤「結束」。",
+      });
+    }
+  });
   mainWin.on("closed", () => {
     mainWin = null;
   });
+
+  createTray();
 }
+
+app.on("before-quit", () => {
+  quitting = true;
+});
+
+app.on("second-instance", () => {
+  showMainWindow();
+});
 
 app.whenReady().then(async () => {
   await createWindow();
