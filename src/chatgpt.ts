@@ -6,6 +6,8 @@
  *  - 網址：https://chatgpt.com/?temporary-chat=true（預設不留紀錄，最穩）
  *  - selector：跟著上游更新（data-testid / lexical / data-turn-key）
  *  - 接回傳：assistant turn 數量先增加 → 最後一則文字連續 2 秒不變 → stop 鈕消失
+ *  - 送出確認：先等送出證據（數量增加／產生中／輸入框清空）才認定送出；已在產生時不再碰送出鈕，
+ *    避免誤按停止鈕。送出後 45 秒沒動靜、或產生中 60 秒零文字，直接報錯不再空等。
  * 不做 MCP / 不操作使用者檔案。
  */
 import { spawn } from "node:child_process";
@@ -53,6 +55,11 @@ const CHROME_NOISE_SELECTOR = [
 ].join(", ");
 
 const SELECT_ALL_KEY = process.platform === "darwin" ? "Meta+A" : "Control+A";
+
+// 送出確認相關閾值：Enter 後等送出證據；送出後等開始產生；產生中指示燈亮卻零文字的最大容忍。
+const SUBMIT_GRACE_MS = 8_000;
+const ACCEPT_TIMEOUT_MS = 45_000;
+const STALL_EMPTY_MS = 60_000;
 
 export class NotLoggedInError extends Error {
   constructor() {
@@ -327,20 +334,49 @@ export class ChatGptSession {
     const before = await countAssistantTurns(page);
     await composer.press("Enter");
 
-    // Enter 沒送出（變多行模式）→ 改按送出鈕（限定 composer 所在 form，避免誤按）。
-    await page.waitForTimeout(1_500);
-    if ((await countAssistantTurns(page)) === before) {
-      const form = composer.locator("xpath=ancestor::form[1]");
-      const send = form.locator(SEND_BUTTON_SELECTOR).filter({ visible: true }).first();
-      if (await send.isVisible().catch(() => false)) {
-        await send.click({ timeout: 10_000 }).catch(() => {});
-      } else {
-        const fallback = await firstVisible(page, SEND_BUTTON_SELECTOR, 5_000);
-        if (fallback) await fallback.click({ timeout: 10_000 }).catch(() => {});
+    // 送出證據：assistant 數量增加、產生中指示燈出現、或輸入框被清空（任一即算送出成功）。
+    const submitEvidence = async (): Promise<boolean> => {
+      if ((await countAssistantTurns(page)) > before) return true;
+      if (await isGenerating(page).catch(() => false)) return true;
+      const text = ((await composer.textContent().catch(() => null)) ?? "").trim();
+      if (text.length === 0) return true;
+      return false;
+    };
+    const waitEvidence = async (timeoutMs: number): Promise<boolean> => {
+      const end = Date.now() + timeoutMs;
+      while (Date.now() < end) {
+        if (await submitEvidence()) return true;
+        await page.waitForTimeout(400);
+      }
+      return submitEvidence();
+    };
+
+    // Enter 後先等送出證據；沒證據且輸入框還有字、也沒在產生，才按送出鈕。
+    // （已在產生時絕對不再碰按鈕，避免誤按停止鈕把剛送出的對話暫停。）
+    let submitted = await waitEvidence(SUBMIT_GRACE_MS);
+    if (!submitted) {
+      const current = ((await composer.textContent().catch(() => null)) ?? "").trim();
+      const generating = await isGenerating(page).catch(() => false);
+      if (current.length > 0 && !generating) {
+        const form = composer.locator("xpath=ancestor::form[1]");
+        const send = form.locator(SEND_BUTTON_SELECTOR).filter({ visible: true }).first();
+        if (await send.isVisible().catch(() => false)) {
+          await send.click({ timeout: 10_000 }).catch(() => {});
+        } else {
+          const fallback = await firstVisible(page, SEND_BUTTON_SELECTOR, 5_000);
+          if (fallback) await fallback.click({ timeout: 10_000 }).catch(() => {});
+        }
+        submitted = await waitEvidence(SUBMIT_GRACE_MS);
+      } else if (current.length === 0 || generating) {
+        submitted = true;
       }
     }
+    if (!submitted) {
+      throw new ChatGptError("送出沒有被 ChatGPT 接受（輸入框還有字、也沒開始產生），請確認頁面狀態後重試。");
+    }
+    const submittedAt = Date.now();
 
-    const reply = await this.waitForReply(page, before, options.signal);
+    const reply = await this.waitForReply(page, before, options.signal, submittedAt);
     return { reply, conversationUrl: page.url(), durationMs: Date.now() - startedAt };
   }
 
@@ -382,31 +418,52 @@ export class ChatGptSession {
   /**
    * 接回傳：assistant turn 數量先增加 → 最後一則文字連續 2 秒不變 → stop 鈕消失。
    * 用數量先增加擋掉「沿用舊對話時拿到上一則」的誤判（跟舊版同邏輯，selector 已換新）。
+   * 另有兩道 fail-fast：送出後 45 秒還沒動靜、產生中指示燈亮著卻 60 秒零文字，都直接報錯不再空等。
    */
-  private async waitForReply(page: Page, before: number, signal?: AbortSignal): Promise<string> {
+  private async waitForReply(page: Page, before: number, signal?: AbortSignal, submittedAt = Date.now()): Promise<string> {
     const deadline = Date.now() + this.config.turnTimeoutMs;
+    const acceptDeadline = submittedAt + ACCEPT_TIMEOUT_MS;
     let lastText = "";
     let stableSince = 0;
+    let emptyStallSince = 0;
 
     while (Date.now() < deadline) {
       if (signal?.aborted) throw new ChatGptError("請求已取消。");
 
-      if ((await countAssistantTurns(page)) <= before) {
-        lastText = "";
-        stableSince = 0;
+      const count = await countAssistantTurns(page);
+      const text = await readLastAssistantText(page).catch(() => "");
+      const accepted = count > before || text.length > 0;
+      if (!accepted) {
+        if (Date.now() > acceptDeadline) {
+          throw new ChatGptError("送出後 45 秒仍沒有開始產生回覆，對話可能沒有真的跑起來，請重試。");
+        }
         await page.waitForTimeout(400);
         continue;
       }
 
-      const text = await readLastAssistantText(page).catch(() => lastText);
-      if (text && text !== lastText) {
+      if (!text) {
+        const generating = await isGenerating(page).catch(() => false);
+        if (generating) {
+          if (emptyStallSince === 0) emptyStallSince = Date.now();
+          else if (Date.now() - emptyStallSince >= STALL_EMPTY_MS) {
+            throw new ChatGptError("ChatGPT 顯示產生中但 60 秒沒有任何文字（疑似被暫停），已停止等待，請重試。");
+          }
+        } else if (Date.now() > acceptDeadline) {
+          throw new ChatGptError("送出後 45 秒仍沒有開始產生回覆，對話可能沒有真的跑起來，請重試。");
+        }
+        await page.waitForTimeout(500);
+        continue;
+      }
+
+      emptyStallSince = 0;
+      if (text !== lastText) {
         lastText = text;
         stableSince = 0;
-      } else if (text && stableSince === 0) {
+      } else if (stableSince === 0) {
         stableSince = Date.now();
       }
 
-      if (text && stableSince > 0 && Date.now() - stableSince >= 2_000) {
+      if (stableSince > 0 && Date.now() - stableSince >= 2_000) {
         if (!(await isGenerating(page).catch(() => false))) return text;
       }
 

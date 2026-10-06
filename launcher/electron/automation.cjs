@@ -74,6 +74,20 @@ function __isGenerating() {
   });
 }
 
+function __composerText() {
+  const sels = __COMPOSER_SEL.split("|||");
+  for (const sel of sels) {
+    const els = Array.from(document.querySelectorAll(sel)).filter(
+      (el) => el.getClientRects().length > 0,
+    );
+    if (els.length > 0) {
+      const t = els[0];
+      return ((t.textContent || t.value || "").trim().length > 0) ? "has-text" : "empty";
+    }
+  }
+  return "no-composer";
+}
+
 function __checkAuthSession() {
   return fetch("/api/auth/session", {
     credentials: "include",
@@ -126,5 +140,7 @@ module.exports = {
       __NOISE_SEL: CHROME_NOISE_SELECTOR,
     }),
   isGeneratingJS: () => fnSource(__isGenerating, { __STOP_SEL: STOP_BUTTON_SELECTOR }),
+  composerTextJS: () =>
+    fnSource(__composerText, { __COMPOSER_SEL: COMPOSER_SELECTOR.split(", ").join("|||") }),
   checkAuthSessionJS: () => `(${__checkAuthSession.toString()})()`,
 };

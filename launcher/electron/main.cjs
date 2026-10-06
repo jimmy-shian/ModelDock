@@ -15,6 +15,10 @@ const HOST = (process.env.HOST || "127.0.0.1").trim() || "127.0.0.1";
 const PORT = Number(process.env.PORT || 8787) || 8787;
 const API_KEY = (process.env.API_KEY || "").trim();
 const TURN_TIMEOUT_MS = Number(process.env.TURN_TIMEOUT_MS || 300000) || 300000;
+// 送出確認相關閾值：Enter 後等送出證據；送出後等開始產生；產生中指示燈亮卻零文字的最大容忍。
+const SUBMIT_GRACE_MS = 8000;
+const ACCEPT_TIMEOUT_MS = 45000;
+const STALL_EMPTY_MS = 60000;
 
 // 內嵌 ChatGPT 頁跟系統外觀走：宣告深色，頁面即為暗色（ChatGPT 外觀須為「系統」）
 nativeTheme.themeSource = "dark";
@@ -110,37 +114,94 @@ async function askOnce(prompt, options = {}) {
 
   const before = (await runJS(chatView, auto.countAssistantJS())) ?? 0;
 
-  // 2) 送出：先 Enter，1.5 秒沒動靜改按送出鈕（限定 composer 所在 form）
-  const enterJS = `(function(){const sels=${JSON.stringify(auto.COMPOSER_SELECTOR)};const els=document.querySelectorAll(sels);let t=null;for(const e of els){if(e.getClientRects().length>0){t=e;break;}}if(!t)return false;t.focus();const ev=(type)=>t.dispatchEvent(new KeyboardEvent(type,{key:"Enter",code:"Enter",keyCode:13,which:13,bubbles:true,cancelable:true}));ev("keydown");ev("keypress");ev("keyup");return true;})()`;
-  await runJS(chatView, enterJS);
-  await sleep(1500);
-  const mid = (await runJS(chatView, auto.countAssistantJS())) ?? before;
-  if (mid === before) {
-    const clickJS = `(function(){const csels=${JSON.stringify(auto.COMPOSER_SELECTOR)};const ssels=${JSON.stringify(auto.SEND_BUTTON_SELECTOR)};const els=document.querySelectorAll(csels);let t=null;for(const e of els){if(e.getClientRects().length>0){t=e;break;}}if(!t)return false;const form=t.closest("form");const scope=form||document;const btns=scope.querySelectorAll(ssels);for(const b of btns){if(b.getClientRects().length>0&&!b.disabled){b.click();return true;}}return false;})()`;
-    await runJS(chatView, clickJS);
+  // 送出證據：assistant 數量增加、產生中指示燈出現、或輸入框被清空（任一即算送出成功）。
+  async function submitEvidence() {
+    const count = (await runJS(chatView, auto.countAssistantJS())) ?? 0;
+    if (count > before) return true;
+    const generating = await runJS(chatView, auto.isGeneratingJS());
+    if (generating) return true;
+    const composer = await runJS(chatView, auto.composerTextJS());
+    if (composer === "empty") return true;
+    return false;
+  }
+  async function waitEvidence(timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (await submitEvidence()) return true;
+      await sleep(400);
+    }
+    return submitEvidence();
   }
 
-  // 3) 接回傳：數量先增加 → 最後一則連續 2 秒不變 → stop 消失
+  // 2) 送出：先 Enter，等送出證據；沒證據且輸入框還有字、也沒在產生，才按送出鈕。
+  //    （已在產生時絕對不再碰按鈕，避免誤按停止鈕把剛送出的對話暫停。）
+  const enterJS = `(function(){const sels=${JSON.stringify(auto.COMPOSER_SELECTOR)};const els=document.querySelectorAll(sels);let t=null;for(const e of els){if(e.getClientRects().length>0){t=e;break;}}if(!t)return false;t.focus();const ev=(type)=>t.dispatchEvent(new KeyboardEvent(type,{key:"Enter",code:"Enter",keyCode:13,which:13,bubbles:true,cancelable:true}));ev("keydown");ev("keypress");ev("keyup");return true;})()`;
+  await runJS(chatView, enterJS);
+  let submitted = await waitEvidence(SUBMIT_GRACE_MS);
+  if (!submitted) {
+    const composer = await runJS(chatView, auto.composerTextJS());
+    const generating = await runJS(chatView, auto.isGeneratingJS());
+    if (composer === "has-text" && !generating) {
+      const clickJS = `(function(){const csels=${JSON.stringify(auto.COMPOSER_SELECTOR)};const ssels=${JSON.stringify(auto.SEND_BUTTON_SELECTOR)};const els=document.querySelectorAll(csels);let t=null;for(const e of els){if(e.getClientRects().length>0){t=e;break;}}if(!t)return false;const form=t.closest("form");const scope=form||document;const btns=scope.querySelectorAll(ssels);for(const b of btns){if(b.getClientRects().length>0&&!b.disabled){b.click();return true;}}return false;})()`;
+      await runJS(chatView, clickJS);
+      submitted = await waitEvidence(SUBMIT_GRACE_MS);
+    } else if (composer === "empty" || generating) {
+      submitted = true;
+    }
+  }
+  if (!submitted) {
+    const e = new Error("送出沒有被 ChatGPT 接受（輸入框還有字、也沒開始產生），請確認頁面狀態後重試。");
+    e.code = "submit_not_accepted";
+    throw e;
+  }
+  const submittedAt = Date.now();
+
+  // 3) 接回傳：數量先增加 → 最後一則連續 2 秒不變 → stop 消失。
+  //    另有兩道 fail-fast：送出後 45 秒還沒動靜、產生中指示燈亮著卻 60 秒零文字，都直接報錯不再空等。
   const deadline = Date.now() + TURN_TIMEOUT_MS;
+  const acceptDeadline = submittedAt + ACCEPT_TIMEOUT_MS;
   let lastText = "";
   let stableSince = 0;
+  let emptyStallSince = 0;
   while (Date.now() < deadline) {
     if (signal && signal.aborted) throw new Error("請求已取消。");
     const count = (await runJS(chatView, auto.countAssistantJS())) ?? 0;
-    if (count <= before) {
-      lastText = "";
-      stableSince = 0;
+    const text = (await runJS(chatView, auto.readLastAssistantJS())) || "";
+    const accepted = count > before || text.length > 0;
+    if (!accepted) {
+      if (Date.now() > acceptDeadline) {
+        const e = new Error("送出後 45 秒仍沒有開始產生回覆，對話可能沒有真的跑起來，請重試。");
+        e.code = "submit_stalled";
+        throw e;
+      }
       await sleep(400);
       continue;
     }
-    const text = (await runJS(chatView, auto.readLastAssistantJS())) || lastText;
-    if (text && text !== lastText) {
+    if (!text) {
+      const generating = await runJS(chatView, auto.isGeneratingJS());
+      if (generating) {
+        if (emptyStallSince === 0) emptyStallSince = Date.now();
+        else if (Date.now() - emptyStallSince >= STALL_EMPTY_MS) {
+          const e = new Error("ChatGPT 顯示產生中但 60 秒沒有任何文字（疑似被暫停），已停止等待，請重試。");
+          e.code = "submit_stalled";
+          throw e;
+        }
+      } else if (Date.now() > acceptDeadline) {
+        const e = new Error("送出後 45 秒仍沒有開始產生回覆，對話可能沒有真的跑起來，請重試。");
+        e.code = "submit_stalled";
+        throw e;
+      }
+      await sleep(500);
+      continue;
+    }
+    emptyStallSince = 0;
+    if (text !== lastText) {
       lastText = text;
       stableSince = 0;
-    } else if (text && stableSince === 0) {
+    } else if (stableSince === 0) {
       stableSince = Date.now();
     }
-    if (text && stableSince > 0 && Date.now() - stableSince >= 2000) {
+    if (stableSince > 0 && Date.now() - stableSince >= 2000) {
       const generating = await runJS(chatView, auto.isGeneratingJS());
       if (!generating) {
         return { reply: text, conversationUrl: chatView.webContents.getURL(), durationMs: Date.now() - startedAt };
