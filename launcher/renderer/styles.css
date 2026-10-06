@@ -164,6 +164,36 @@ textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-
 .copy-btn:hover { border-color: var(--accent); }
 .copy-btn.copied { background: var(--success); border-color: var(--success); color: #fff; }
 
+/* Segmented toggle (single-button switch for protocol / visibility) */
+.seg {
+  display: inline-flex; gap: 0; border: 1px solid var(--border);
+  border-radius: 9px; overflow: hidden; background: var(--surface-subtle);
+}
+.seg-btn {
+  border: 0; background: transparent; color: var(--text-secondary);
+  font-size: 14px; padding: 8px 14px; cursor: pointer;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+.seg-btn + .seg-btn { border-left: 1px solid var(--border); }
+.seg-btn.active { background: var(--accent); color: #fff; }
+.seg-btn:not(.active):hover { background: var(--border); color: var(--text-primary); }
+
+/* Toggle action button shows on/off state without needing two buttons */
+button.action.toggle[aria-pressed="false"] { background: var(--surface-subtle); color: var(--text-primary); border: 1px solid var(--border); }
+button.action.toggle[aria-pressed="false"]:hover { border-color: var(--accent); }
+
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px; }
+@media (max-width: 560px) { .grid2 { grid-template-columns: 1fr; } }
+.inline { display: flex; gap: 8px; align-items: center; }
+.inline input { flex: 1; min-width: 0; }
+input, select {
+  width: 100%; background: var(--surface-subtle);
+  border: 1px solid var(--border); color: var(--text-primary);
+  border-radius: 8px; padding: 8px 10px; font-size: 14px; font-family: inherit;
+}
+input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
+button.small { padding: 8px 10px; font-size: 13px; white-space: nowrap; }
+
 /* Toast */
 .toast {
   position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(20px);

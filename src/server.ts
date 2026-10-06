@@ -201,7 +201,7 @@ export function createServer(config: AppConfig, session: ChatGptSession): { port
       }
 
       // ---- OpenAI Compatible ----
-      if (request.method === "GET" && url.pathname === "/v1/models") {
+      if (request.method === "GET" && (url.pathname === "/v1/models" || url.pathname === "/models")) {
         const now = Math.floor(Date.now() / 1000);
         return json({
           object: "list",

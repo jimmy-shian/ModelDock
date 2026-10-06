@@ -1,6 +1,6 @@
 {
   "name": "chatdock",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "ChatDock 桌面應用（Electron，內含瀏覽器，免裝 Chrome / 免 Python）",
   "type": "commonjs",

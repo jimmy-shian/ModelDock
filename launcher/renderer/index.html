@@ -27,26 +27,49 @@
     <span class="auto-note" id="autoNote">自動刷新中 · 更新於 --</span>
   </div>
   <div class="row">
-    <button class="action" id="btnShowLogin">顯示登入頁</button>
+    <button class="action toggle" id="btnToggleLogin" aria-pressed="true">隱藏登入頁</button>
     <button class="ghost" id="btnNewChat">開新對話</button>
   </div>
-  <div class="hint">右側頁面登入 ChatGPT，看到輸入框即完成。隱藏登入頁可放大左側面板。</div>
-  <div class="row">
-    <button class="ghost" id="btnHideLogin">隱藏登入頁</button>
-  </div>
+  <div class="hint">右側頁面登入 ChatGPT，看到輸入框即完成。隱藏登入頁可放大左側面板。上面是同一個按鈕，用切換方式顯示 / 隱藏。</div>
 </div>
 
 <div class="card">
   <h2>對話測試</h2>
+  <label class="field">發送方式（同一個送出按鈕，切換協定）</label>
+  <div class="seg" role="tablist" aria-label="發送方式">
+    <button class="seg-btn active" id="segNative" role="tab" aria-selected="true">原生 /chat</button>
+    <button class="seg-btn" id="segOai" role="tab" aria-selected="false">OpenAI 相容</button>
+  </div>
+  <div class="grid2">
+    <div>
+      <label class="field" for="oaiModel">模型 ID（OpenAI 相容用）</label>
+      <div class="inline">
+        <input id="oaiModel" list="modelList" value="gpt-web-port" spellcheck="false" />
+        <button class="ghost small" id="btnModels" title="從 GET /v1/models 取得可用模型">取得模型</button>
+      </div>
+      <datalist id="modelList"></datalist>
+    </div>
+    <div>
+      <label class="field" for="chatMode">對話紀錄模式</label>
+      <select id="chatMode">
+        <option value="temporary">無痕（temporary-chat，不留紀錄）</option>
+        <option value="normal">一般（保留對話紀錄）</option>
+      </select>
+    </div>
+  </div>
   <label class="field" for="prompt">prompt</label>
   <textarea id="prompt" placeholder="用一句話介紹台灣"></textarea>
-  <div class="check"><input type="checkbox" id="cont" /><span>沿用上一輪（continue）</span></div>
+  <div class="grid2">
+    <label class="check"><input type="checkbox" id="cont" /><span>沿用上一輪（continue）</span></label>
+    <label class="check"><input type="checkbox" id="contDefault" /><span>記住為預設（下次開啟沿用）</span></label>
+  </div>
   <div class="row">
     <button class="action" id="btnAsk">送出</button>
     <button class="ghost" id="btnClear">清空</button>
     <span class="pill" id="askState">idle</span>
   </div>
   <div class="mono" id="askOut">回覆會顯示在這裡…</div>
+  <div class="hint" id="askHint">目前：原生 /chat · 每次重開 · 無痕模式。</div>
 </div>
 
 <div class="modal-overlay" id="helpOverlay">

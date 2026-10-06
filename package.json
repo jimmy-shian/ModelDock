@@ -1,6 +1,6 @@
 {
   "name": "chatdock",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "ChatDock：把 ChatGPT 網頁版接進本機（內嵌登入頁＋自動丟收＋HTTP/OpenAI 相容）。",
   "type": "module",

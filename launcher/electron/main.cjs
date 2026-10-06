@@ -28,6 +28,11 @@ let panelView = null;
 let chatView = null;
 let chatReady = null; // 內嵌頁首次載入完成的 promise
 let loginVisible = true;
+// 對話紀錄模式：true = 無痕 temporary-chat（預設，不留紀錄）；false = 一般（保留紀錄）
+let temporaryChat = process.env.TEMPORARY_CHAT !== "0";
+function currentChatUrl() {
+  return temporaryChat ? auto.CHAT_URL : "https://chatgpt.com/";
+}
 let queue = Promise.resolve();
 let tray = null;
 let quitting = false; // 只有從托盤選單「結束」或 CmdQ 才真正退出
@@ -97,7 +102,7 @@ function layoutViews() {
 async function ensureChatLoaded() {
   const url = chatView.webContents.getURL();
   if (!/^https:\/\/chatgpt\.com\//.test(url)) {
-    chatView.webContents.loadURL(auto.CHAT_URL);
+    chatView.webContents.loadURL(currentChatUrl());
     await chatReady;
   }
   // 等 composer 出現（最多 60 秒）
@@ -118,7 +123,7 @@ async function checkLogin() {
     if (/^https:\/\/chatgpt\.com\//.test(url)) {
       sessionAuth = await runJS(chatView, auto.checkAuthSessionJS());
     }
-    return { loggedIn: composer === true, url, sessionAuth };
+    return { loggedIn: composer === true, url, sessionAuth, loginVisible, temporaryChat };
   } catch (e) {
     return { loggedIn: false, url: "", error: String((e && e.message) || e) };
   }
@@ -131,7 +136,7 @@ async function askOnce(prompt, options = {}) {
 
   const inChat = /^https:\/\/chatgpt\.com\/c\/[0-9a-f-]+/i.test(chatView.webContents.getURL() || "");
   if (!(options.continueConversation === true && inChat)) {
-    chatView.webContents.loadURL(auto.CHAT_URL);
+    chatView.webContents.loadURL(currentChatUrl());
     const ok = await ensureChatLoaded();
     if (!ok) {
       const e = new Error("還沒登入 ChatGPT。請在右邊內嵌頁面完成登入（看到輸入框才算）。");
@@ -344,16 +349,20 @@ function startHttp() {
         pageUrl: s.url,
         sessionAuth: s.sessionAuth || null,
         loginVisible,
+        temporaryChat,
       });
     }
-    if (req.method === "GET" && u.pathname === "/v1/models") {
+    if (req.method === "GET" && (u.pathname === "/v1/models" || u.pathname === "/models")) {
       const now = Math.floor(Date.now() / 1000);
       return sendJson(res, {
         object: "list",
-        data: [{ id: "gpt-web-port", object: "model", created: now, owned_by: "chatgpt-web" }],
+        data: [
+          { id: "gpt-web-port", object: "model", created: now, owned_by: "chatgpt-web" },
+          { id: "chatgpt-web", object: "model", created: now, owned_by: "chatgpt-web" },
+        ],
       });
     }
-    if (req.method === "POST" && (u.pathname === "/v1/chat/completions" || u.pathname === "/chat/completions")) {
+    if (req.method === "POST" && (u.pathname === "/v1/chat/completions" || u.pathname === "/v1/completions" || u.pathname === "/chat/completions")) {
       let body;
       try {
         body = JSON.parse(await readBody(req));
@@ -366,6 +375,7 @@ function startHttp() {
       let prompt = "";
       if (Array.isArray(body.messages)) prompt = messagesToPrompt(body.messages);
       else if (typeof body.prompt === "string") prompt = body.prompt;
+      else if (typeof body.input === "string") prompt = body.input;
       if (!prompt.trim()) return sendJson(res, { error: { message: "缺少 messages。", type: "invalid_request_error" } }, 400);
       const ctrl = new AbortController();
       req.on("close", () => ctrl.abort());
@@ -476,25 +486,41 @@ async function createWindow() {
   });
   // 身份提供者 popup 留在應用內（跟上游一樣，不跳外部瀏覽器）
   chatView.webContents.setWindowOpenHandler(() => ({ action: "allow" }));
-  await chatView.webContents.loadURL(auto.CHAT_URL);
+  await chatView.webContents.loadURL(currentChatUrl());
 
   layoutViews();
   mainWin.on("resize", layoutViews);
 
-  // 頂部選單：切換內嵌登入頁顯示
+  // 單一切換按鈕：顯示 / 隱藏登入頁（同一個按鈕切換，不再要兩個）
   ipcMain.handle("show-panel", async () => {
     loginVisible = false;
     layoutViews();
-    return { ok: true };
+    return { ok: true, loginVisible };
   });
   ipcMain.handle("show-login", async () => {
     loginVisible = true;
     layoutViews();
     try {
       const url = chatView.webContents.getURL();
-      if (!/^https:\/\/chatgpt\.com\//.test(url)) await chatView.webContents.loadURL(auto.CHAT_URL);
+      if (!/^https:\/\/chatgpt\.com\//.test(url)) await chatView.webContents.loadURL(currentChatUrl());
     } catch {}
-    return { ok: true };
+    return { ok: true, loginVisible };
+  });
+  ipcMain.handle("toggle-login", async () => {
+    loginVisible = !loginVisible;
+    layoutViews();
+    try {
+      if (loginVisible) {
+        const url = chatView.webContents.getURL();
+        if (!/^https:\/\/chatgpt\.com\//.test(url)) await chatView.webContents.loadURL(currentChatUrl());
+      }
+    } catch {}
+    return { ok: true, loginVisible };
+  });
+  // 對話紀錄模式：無痕 temporary vs 一般保留紀錄（記住為預設，下次問答/開新對話生效）
+  ipcMain.handle("set-temporary-chat", async (_e, temporary) => {
+    temporaryChat = temporary !== false;
+    return { ok: true, temporaryChat };
   });
   ipcMain.handle("login-status", checkLogin);
   // 左側面板主題切換時，同步內嵌頁的 prefers-color-scheme
@@ -508,7 +534,7 @@ async function createWindow() {
     });
   });
   ipcMain.handle("new-chat", async () => {
-    await chatView.webContents.loadURL(auto.CHAT_URL);
+    await chatView.webContents.loadURL(currentChatUrl());
     return { ok: true };
   });
 
