@@ -61,9 +61,14 @@ def save_cookies(one_psid: str, one_psidts: str = "") -> bool:
         return False
 
 
-def update_psidts(new_psidts: str) -> bool:
+def update_psidts(new_psidts: str, client_psid: str = "") -> bool:
     """
     Persist a rotated __Secure-1PSIDTS value while keeping the stored 1PSID.
+
+    Lineage guard: when the caller's session PSID is known, only write if the
+    file holds the SAME 1PSID. This prevents one stale in-memory session from
+    grafting its PSIDTS onto another (fresher) session's PSID, a combination
+    Google rejects with UNAUTHENTICATED for all new clients.
     """
     new_psidts = (new_psidts or "").strip()
     if not new_psidts:
@@ -73,6 +78,11 @@ def update_psidts(new_psidts: str) -> bool:
         return False  # unchanged
     psid = current.get("1psid", "")
     if not psid:
+        return False
+    if client_psid and client_psid.strip() != psid:
+        LOGGER.warning(
+            "🛡️ [DIRECT] 拒絕寫入 PSIDTS：來源會話與檔案會話不同（防混種寫入）。"
+        )
         return False
     return save_cookies(psid, new_psidts)
 
@@ -164,9 +174,12 @@ class DirectGeminiEngine:
             except Exception as e:
                 LOGGER.warning("⚠️ [DIRECT] GeminiClient 初始化警告: %s", e)
 
-            # Auto persist rotated cookies if updated
+            # Auto persist rotated cookies if updated (same-session lineage only)
             if client.cookies.get("__Secure-1PSIDTS") and client.cookies.get("__Secure-1PSIDTS") != cookies.get("1psidts"):
-                update_psidts(client.cookies["__Secure-1PSIDTS"])
+                update_psidts(
+                    client.cookies["__Secure-1PSIDTS"],
+                    client_psid=str(client.cookies.get("__Secure-1PSID", "") or cookies.get("1psid", "")),
+                )
 
             self._client = client
             return self._client
@@ -184,18 +197,13 @@ class DirectGeminiEngine:
 
 
     def _resolve_model_name(self, client: GeminiClient, requested_model: str) -> Optional[str]:
+        # Single-model build: everything resolves to gemini-flash.
         # If client status is not AVAILABLE (e.g. UNAUTHENTICATED or limited tier),
-        # passing model string causes gemini_webapi line 1420 to reject with GeminiError.
+        # passing model string causes gemini_webapi to reject with GeminiError.
         # Passing None allows Google to use the account's default model safely!
         if getattr(client, "account_status", None) != AccountStatus.AVAILABLE:
             return None
-
-        m_lower = (requested_model or "").lower()
-        if "pro" in m_lower or "ultra" in m_lower:
-            return "gemini-pro"
-        elif "flash" in m_lower:
-            return "gemini-flash"
-        return None
+        return "gemini-flash"
 
     def _cleanup_stale_sessions(self, max_idle_sec: float = 7200):
         now = time.time()
@@ -207,7 +215,7 @@ class DirectGeminiEngine:
     async def stream_generate(
         self,
         prompt: str,
-        model: str = "gemini-web/pro",
+        model: str = "gemini-web/flash",
         session_id: Optional[str] = None,
         is_continuation: bool = False,
         files: Optional[List[Any]] = None,
@@ -230,7 +238,7 @@ class DirectGeminiEngine:
         self._cleanup_stale_sessions()
 
         resolved_model = self._resolve_model_name(client, model)
-        extended_thinking = ("thinking" in model.lower() or "pro" in model.lower())
+        extended_thinking = False  # think removed: single Flash route, no thought streaming
 
         chat = None
         if session_id and is_continuation and session_id in self._sessions:
@@ -298,7 +306,7 @@ class DirectGeminiEngine:
     async def generate_analysis(
         self,
         prompt: str,
-        model: str = "gemini-web/pro",
+        model: str = "gemini-web/flash",
         files: Optional[List[Any]] = None,
     ) -> Dict[str, Any]:
         """
@@ -312,7 +320,7 @@ class DirectGeminiEngine:
         clean_prompt = prompt.strip()
         client = await self.get_client()
         resolved_model = self._resolve_model_name(client, model)
-        extended_thinking = ("thinking" in model.lower() or "pro" in model.lower())
+        extended_thinking = False  # think removed: single Flash route, no thought streaming
 
         chat = client.start_chat(model=resolved_model)
         accumulated_text = ""
@@ -362,7 +370,7 @@ async def reload_client():
 
 def stream_generate(
     prompt: str,
-    model: str = "gemini-web/pro",
+    model: str = "gemini-web/flash",
     session_id: Optional[str] = None,
     is_continuation: bool = False,
     files: Optional[List[Any]] = None,

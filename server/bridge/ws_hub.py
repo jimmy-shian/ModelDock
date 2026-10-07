@@ -317,7 +317,7 @@ class BrowserWebSocketHub:
     async def execute_turn(
         self,
         prompt: str,
-        model: str = "gemini-web/pro",
+        model: str = "gemini-web/flash",
         timeout_sec: int = DEFAULT_BROWSER_TIMEOUT,
         is_new_session: bool = True,
         platform: Optional[str] = None,

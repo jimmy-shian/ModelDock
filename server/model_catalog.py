@@ -12,7 +12,7 @@ class GeminiWebModelRoute(BaseModel):
     id: str
     slug: str
     display_name: str
-    backend_mode: str  # "flash", "pro", "thinking", "ultra", "auto"
+    backend_mode: str  # "flash" (sole Gemini backend)
     description: str
     context_window: int = 32_768  # 32K token safe limit for Gemini Web browser transport
     max_output_tokens: int = 8_192
@@ -23,91 +23,28 @@ class GeminiWebModelRoute(BaseModel):
     is_default: bool = False
 
 
-# Supported Gemini Web model definitions
+# Supported model definitions.
+# NOTE: Gemini is intentionally a single route (gemini-web/flash). Every other
+# Gemini name ever advertised (pro / ultra / thinking / auto / version aliases)
+# resolves to this route via the default fallback in resolve_model_route.
 AVAILABLE_GEMINI_WEB_ROUTES: List[GeminiWebModelRoute] = [
     GeminiWebModelRoute(
         id="gemini-web/flash",
         slug="gemini-web/flash",
-        display_name="Gemini Web - 2.5 Flash",
+        display_name="Gemini Web - Flash",
         backend_mode="flash",
-        description="High-speed multimodal Gemini 2.5 Flash model with 32K context window and thinking capability.",
+        description="Gemini Web model (direct: gemini-flash backend, verified working).",
         context_window=32_768,
         max_output_tokens=8_192,
-        supports_thinking=True,
-        is_default=False,
-    ),
-    GeminiWebModelRoute(
-        id="gemini-web/pro",
-        slug="gemini-web/pro",
-        display_name="Gemini Web - 2.5 Pro",
-        backend_mode="pro",
-        description="Flagship Gemini 2.5 Pro reasoning model with 32K context window, deep coding intelligence, and rich reasoning.",
-        context_window=32_768,
-        max_output_tokens=8_192,
-        supports_thinking=True,
+        supports_thinking=False,
         is_default=True,
-    ),
-    GeminiWebModelRoute(
-        id="gemini-web/flash-thinking",
-        slug="gemini-web/flash-thinking",
-        display_name="Gemini Web - Flash Thinking",
-        backend_mode="thinking",
-        description="Gemini Flash Thinking experimental model with real-time reasoning_content deltas.",
-        context_window=32_768,
-        max_output_tokens=8_192,
-        supports_thinking=True,
-        is_default=False,
-    ),
-    GeminiWebModelRoute(
-        id="gemini-web/ultra",
-        slug="gemini-web/ultra",
-        display_name="Gemini Web - Advanced Ultra",
-        backend_mode="ultra",
-        description="Gemini Advanced / Ultra tier for complex tasks.",
-        context_window=32_768,
-        max_output_tokens=8_192,
-        supports_thinking=True,
-        is_default=False,
-    ),
-    GeminiWebModelRoute(
-        id="gemini-web/auto",
-        slug="gemini-web/auto",
-        display_name="Gemini Web - Auto",
-        backend_mode="auto",
-        description="Automatically routes to the best available Gemini Web model on current page.",
-        context_window=1_048_576,
-        max_output_tokens=32_768,
-        supports_thinking=True,
-        is_default=False,
     ),
     GeminiWebModelRoute(
         id="chatgpt-web/auto",
         slug="chatgpt-web/auto",
-        display_name="ChatGPT Web - Auto",
+        display_name="ChatGPT Web",
         backend_mode="auto",
-        description="ChatGPT Web unlogged-in guest chat with auto-reset hygiene.",
-        context_window=16_384,
-        max_output_tokens=8_192,
-        supports_thinking=False,
-        is_default=False,
-    ),
-    GeminiWebModelRoute(
-        id="chatgpt-web/gpt-4o-mini",
-        slug="chatgpt-web/gpt-4o-mini",
-        display_name="ChatGPT Web - GPT-4o mini",
-        backend_mode="gpt-4o-mini",
-        description="ChatGPT Web default unlogged-in model (GPT-4o mini).",
-        context_window=16_384,
-        max_output_tokens=8_192,
-        supports_thinking=False,
-        is_default=False,
-    ),
-    GeminiWebModelRoute(
-        id="chatgpt-web/gpt-4o",
-        slug="chatgpt-web/gpt-4o",
-        display_name="ChatGPT Web - GPT-4o",
-        backend_mode="gpt-4o",
-        description="ChatGPT Web flagship model.",
+        description="ChatGPT Web model (extension tab: uses whatever model the page currently has selected).",
         context_window=16_384,
         max_output_tokens=8_192,
         supports_thinking=False,
@@ -121,7 +58,7 @@ AVAILABLE_GEMINI_WEB_ROUTES: List[GeminiWebModelRoute] = [
         description="Universal WebChat route (automatically dispatches to active connected platform).",
         context_window=32_768,
         max_output_tokens=8_192,
-        supports_thinking=True,
+        supports_thinking=False,
         is_default=False,
     ),
     GeminiWebModelRoute(
@@ -135,28 +72,10 @@ AVAILABLE_GEMINI_WEB_ROUTES: List[GeminiWebModelRoute] = [
         supports_thinking=False,
         is_default=False,
     ),
-    GeminiWebModelRoute(
-        id="deepseek-web/reasoner",
-        slug="deepseek-web/reasoner",
-        display_name="DeepSeek Web - Reasoner (R1)",
-        backend_mode="deepseek-reasoner",
-        description="DeepSeek Web直連深度推理（thinking_enabled=true，含思考過程）。需設定 DeepSeek userToken。",
-        context_window=32_768,
-        max_output_tokens=8_192,
-        supports_thinking=True,
-        is_default=False,
-    ),
-    GeminiWebModelRoute(
-        id="deepseek-web/search",
-        slug="deepseek-web/search",
-        display_name="DeepSeek Web - Search",
-        backend_mode="deepseek-search",
-        description="DeepSeek Web直連聯網搜尋（search_enabled=true）。需設定 DeepSeek userToken。",
-        context_window=32_768,
-        max_output_tokens=8_192,
-        supports_thinking=False,
-        is_default=False,
-    ),
+    # NOTE: deepseek-web/search is intentionally NOT advertised (no option),
+    # but search stays fully supported in the engine: any model id containing
+    # "search" gets search_enabled=true via resolve_flags() in
+    # server/browser/deepseek_direct.py. Re-add a route here to advertise it.
     GeminiWebModelRoute(
         id="deepseek-web/reasoner-search",
         slug="deepseek-web/reasoner-search",
@@ -171,7 +90,7 @@ AVAILABLE_GEMINI_WEB_ROUTES: List[GeminiWebModelRoute] = [
     GeminiWebModelRoute(
         id="deepseek-web/auto",
         slug="deepseek-web/auto",
-        display_name="DeepSeek Web - Auto",
+        display_name="DeepSeek Web - Auto (R1 reasoning)",
         backend_mode="deepseek-auto",
         description="DeepSeek Web直連自動（預設推理開）。需設定 DeepSeek userToken。",
         context_window=32_768,
@@ -181,49 +100,23 @@ AVAILABLE_GEMINI_WEB_ROUTES: List[GeminiWebModelRoute] = [
     ),
 ]
 
-# Alias map for standard client interoperability (Cline, Kilo, Cursor, RooCode)
+# Alias map: one short alias per canonical route. Anything else falls back
+# to the default route in resolve_model_route (transport + flags still honor
+# the requested name, so old names keep working without being advertised).
 MODEL_ALIAS_MAP: Dict[str, str] = {
     "deepseek-chat": "deepseek-web/chat",
-    "deepseek-v3": "deepseek-web/chat",
-    "deepseek-web-chat": "deepseek-web/chat",
-    "deepseek-default": "deepseek-web/chat",
-    "deepseek-reasoner": "deepseek-web/reasoner",
-    "deepseek-r1": "deepseek-web/reasoner",
-    "deepseek-web-reasoner": "deepseek-web/reasoner",
-    "deepseek-search": "deepseek-web/search",
-    "deepseek-web-search": "deepseek-web/search",
-    "deepseek-v3-search": "deepseek-web/search",
-    "deepseek-reasoner-search": "deepseek-web/reasoner-search",
-    "deepseek-r1-search": "deepseek-web/reasoner-search",
-    "deepseek-web": "deepseek-web/auto",
-    "deepseek-auto": "deepseek-web/auto",
     "deepseek": "deepseek-web/auto",
-    "gemini-2.5-pro": "gemini-web/pro",
-    "gemini-2.0-pro": "gemini-web/pro",
-    "gemini-1.5-pro": "gemini-web/pro",
-    "gemini-pro": "gemini-web/pro",
-    "gemini-2.5-flash": "gemini-web/flash",
-    "gemini-2.0-flash": "gemini-web/flash",
-    "gemini-1.5-flash": "gemini-web/flash",
-    "gemini-flash": "gemini-web/flash",
-    "gemini-web/thinking": "gemini-web/flash-thinking",
-    "gemini-thinking": "gemini-web/flash-thinking",
-    "gemini-2.5-flash-thinking": "gemini-web/flash-thinking",
-    "chatgpt": "chatgpt-web/auto",
-    "chatgpt-web": "chatgpt-web/auto",
-    "chatgpt-4o-mini": "chatgpt-web/gpt-4o-mini",
-    "gpt-4o-mini": "chatgpt-web/gpt-4o-mini",
-    "gpt-4o": "chatgpt-web/gpt-4o",
+    "deepseek-reasoner": "deepseek-web/auto",
+    "deepseek-r1-search": "deepseek-web/reasoner-search",
     "webchat": "webchat/auto",
     "webchat/auto": "webchat/auto",
-    "claude-3-5-sonnet": "gemini-web/pro",
 }
 
 
 def resolve_model_route(model_id: Optional[str]) -> GeminiWebModelRoute:
     """
     Resolves any requested model string (including aliases) to a canonical GeminiWebModelRoute.
-    Defaults to gemini-web/pro if unknown.
+    Defaults to gemini-web/flash (verified working) if unknown.
     """
     if not model_id:
         return next(r for r in AVAILABLE_GEMINI_WEB_ROUTES if r.is_default)
@@ -237,7 +130,7 @@ def resolve_model_route(model_id: Optional[str]) -> GeminiWebModelRoute:
         if route.id == norm_id or route.slug == norm_id or route.backend_mode == norm_id:
             return route
 
-    # Return default pro route
+    # Return default flash route
     return next(r for r in AVAILABLE_GEMINI_WEB_ROUTES if r.is_default)
 
 

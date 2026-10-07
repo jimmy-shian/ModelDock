@@ -408,7 +408,7 @@ async function handleIncomingMessage(msg) {
   if (msg.type === "submit_prompt") {
     const turnId = msg.turn_id;
     const promptText = msg.prompt;
-    const model = msg.model || (isChatGPT ? "chatgpt-web/gpt-4o-mini" : "gemini-web/pro");
+    const model = msg.model || (isChatGPT ? "chatgpt-web/auto" : "gemini-web/flash");
 
     const controller = getActiveController();
     const extractor = getActiveExtractor();

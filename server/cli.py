@@ -151,7 +151,7 @@ async def _async_chat(prompt: str, model: str):
 def cmd_chat(args):
     """Sends a single test prompt to the running bridge server."""
     prompt = args.prompt or "Hello, please write a quick Python hello world!"
-    model = args.model or "gemini-web/pro"
+    model = args.model or "gemini-web/flash"
     asyncio.run(_async_chat(prompt, model))
 
 
@@ -184,7 +184,7 @@ def main():
     # Chat command
     p_chat = subparsers.add_parser("chat", help="Send a test prompt")
     p_chat.add_argument("prompt", nargs="?", default="Hello from CLI", help="Prompt text")
-    p_chat.add_argument("--model", default="gemini-web/pro", help="Model name")
+    p_chat.add_argument("--model", default="gemini-web/flash", help="Model name")
     p_chat.set_defaults(func=cmd_chat)
 
     args = parser.parse_args()

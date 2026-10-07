@@ -56,7 +56,7 @@ This skill enables Antigravity to interact with the local **Gemini Web Bridge** 
 
 ## Features
 - **Local API Gateway**: `{BASE_URL}/v1` (OpenAI & Responses API)
-- **Local Model Routing**: `gemini-web/pro`, `gemini-web/flash`, `gemini-web/thinking`
+- **Local Model Routing**: `gemini-web/flash`
 - **MCP Toolset**: Standard sandboxed filesystem, powershell execution, grep code search, and diagnostic tools.
 
 ## How to use MCP Tools

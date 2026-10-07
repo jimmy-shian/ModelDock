@@ -228,7 +228,7 @@ def _is_transport_noise(text: str) -> bool:
 
 async def stream_openai_completions(
     event_generator: AsyncGenerator[TurnEvent, None],
-    model: str = "gemini-web/pro",
+    model: str = "gemini-web/flash",
     req_id: Optional[str] = None,
     available_tool_names: Optional[list[str]] = None,
 ) -> AsyncGenerator[str, None]:
@@ -516,7 +516,7 @@ async def stream_openai_completions(
 
 async def stream_responses_api(
     event_generator: AsyncGenerator[TurnEvent, None],
-    model: str = "gemini-web/pro",
+    model: str = "gemini-web/flash",
     req_id: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
     """
@@ -580,7 +580,7 @@ async def stream_responses_api(
 
 async def collect_complete_response(
     event_generator: AsyncGenerator[TurnEvent, None],
-    model: str = "gemini-web/pro",
+    model: str = "gemini-web/flash",
     available_tool_names: Optional[list[str]] = None,
 ) -> ChatCompletionResponse:
     """

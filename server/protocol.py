@@ -38,7 +38,7 @@ class ChatMessage(BaseModel):
 class ChatCompletionRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    model: str = "gemini-web/pro"
+    model: str = "gemini-web/flash"
     messages: List[ChatMessage]
     stream: Optional[bool] = False
     temperature: Optional[float] = 0.7
@@ -94,7 +94,7 @@ class ChatCompletionChunk(BaseModel):
 class ResponsesRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    model: str = "gemini-web/pro"
+    model: str = "gemini-web/flash"
     input: Union[str, List[Any], Dict[str, Any]]
     stream: Optional[bool] = True
     tools: Optional[List[Dict[str, Any]]] = None

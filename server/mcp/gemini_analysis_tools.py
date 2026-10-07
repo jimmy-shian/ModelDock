@@ -129,7 +129,7 @@ async def analyze_code(
         files: List of file paths to inspect and analyze (relative or absolute).
         code_snippet: Optional raw code, diff, or log text to analyze alongside or instead of files.
         instructions: Specific review directives or questions about the code.
-        model: Model or route to use ('webchat/auto', 'chatgpt-web/auto', 'gemini-web/pro').
+        model: Model or route to use ('webchat/auto', 'chatgpt-web/auto', 'gemini-web/flash').
     """
     file_blocks = []
     if files:
@@ -186,7 +186,7 @@ async def ask_gemini(
 
     Args:
         prompt: The query or reasoning prompt to send to WebChat.
-        model: Model to use ('webchat/auto', 'gemini-web/pro', 'chatgpt-web/auto').
+        model: Model to use ('webchat/auto', 'gemini-web/flash', 'chatgpt-web/auto').
     """
     clean_prompt = prompt.strip()
     if not clean_prompt:

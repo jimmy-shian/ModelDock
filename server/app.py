@@ -410,7 +410,7 @@ async def reset_server_state():
 async def dev_synthetic_turn(payload: dict):
     """Synthetic prompt tester for the web dashboard (uses the active transport)."""
     prompt = payload.get("prompt", "")
-    model = payload.get("model", "gemini-web/pro")
+    model = payload.get("model", "gemini-web/flash")
     if not prompt:
         raise HTTPException(status_code=400, detail="Prompt is required.")
 
