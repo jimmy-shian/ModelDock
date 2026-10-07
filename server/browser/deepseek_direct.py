@@ -272,7 +272,20 @@ async def solve_pow_response(challenge: Dict[str, Any]) -> str:
         try:
             return await asyncio.to_thread(_via_package)
         except Exception as e:
-            LOGGER.warning("⚠️ [DEEPSEEK PoW] deepseek-pow 求解失敗，改用內建 keccak: %s", e)
+            LOGGER.warning("⚠️ [DEEPSEEK PoW] deepseek-pow 求解失敗，改用 WASM: %s", e)
+
+    # 2. Official WASM solver (same module the browser runs).
+    def _via_wasm() -> str:
+        from server.browser.deepseek_wasm_pow import get_solver
+        solver = get_solver()
+        if solver is None:
+            raise RuntimeError("WASM solver unavailable")
+        return encode_pow_response(challenge, int(solver.solve(challenge)))
+
+    try:
+        return await asyncio.to_thread(_via_wasm)
+    except Exception as e:
+        LOGGER.warning("⚠️ [DEEPSEEK PoW] WASM 求解失敗，改用內建 keccak: %s", e)
 
     answer = await asyncio.to_thread(solve_pow_answer_sync, challenge)
     return encode_pow_response(challenge, answer)
@@ -336,10 +349,12 @@ def _parse_patch_object(obj: Any, state: Dict[str, Any]) -> Tuple[str, str]:
                 return ("".join(content_out), "".join(thinking_out))
 
     # Case 2: JSON-patch {"p": ..., "o": "APPEND", "v": ...}
+    # NOTE: the "o" verb is sometimes absent (e.g. {"p":"response/fragments/-1/content","v":" km"}).
+    # Any string "v" on a content path is an append.
     p = str(obj.get("p", "") or "")
     o = str(obj.get("o", "") or "").upper()
     vv = obj.get("v")
-    if p and o in ("APPEND", "SET", "REPLACE", "ADD"):
+    if p and o in ("APPEND", "SET", "REPLACE", "ADD", ""):
         # New fragments appended to the list.
         if "fragments" in p and isinstance(vv, list):
             for frag in vv:
@@ -360,6 +375,17 @@ def _parse_patch_object(obj: Any, state: Dict[str, Any]) -> Tuple[str, str]:
             if ftype in _THINK_TYPES:
                 return ("", vv)
             return (vv, "")
+
+    # Case 2b: bare incremental text {"v": " some text"} with no path.
+    # It continues the CURRENT (last) fragment: THINK-fragment -> thinking,
+    # otherwise content. (Verified: think tokens stream as bare-v until the
+    # RESPONSE fragment is appended, then the answer streams as bare-v.)
+    if not p and isinstance(obj.get("v"), str) and obj.get("v"):
+        frag_types = state.get("frag_types", [])
+        last_type = frag_types[-1] if frag_types else ""
+        if last_type in _THINK_TYPES:
+            return ("", obj["v"])
+        return (obj["v"], "")
 
     # Case 3: fallback — recursively collect any fragment-like dicts.
     # (Covers minor upstream field renames without breaking the stream.)
@@ -686,7 +712,8 @@ class DirectDeepSeekEngine:
             "ref_file_ids": [],
             "thinking_enabled": thinking_enabled,
             "search_enabled": search_enabled,
-            "client_stream_id": uuid.uuid4().hex,
+            # NOTE: no client_stream_id — DeepSeek rejects unknown formats
+            # (422 "Invalid client stream id format"); omitting works.
         }
         headers = _base_headers(token, pow_response=pow_header, cookies=cookies)
         state: Dict[str, Any] = {"frag_types": [], "parent_message_id": parent_id}
