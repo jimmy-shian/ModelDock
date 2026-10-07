@@ -62,8 +62,8 @@ footer{margin-top:18px;color:var(--mut);font-size:12px}
 <div class="hint">存檔位置：~/.gpt-web-port/config.json，環境變數（PORT/HOST…）優先權高於檔案。PORT/HOST 改完要重啟服務；逾時秒數存完立刻生效。</div>
 </div>
 
-<div class="card" style="margin-top:14px"><h2>6 · 接線範例</h2>
-<div class="mono" id="sample">curl -X POST http://127.0.0.1:8787/v1/chat/completions -H "content-type: application/json" -d '{"model":"gpt-web-port","messages":[{"role":"user","content":"你好"}],"stream":false}'
+ <div class="card" style="margin-top:14px"><h2>6 · 接線範例（Windows 請用 curl.exe，勿用 curl 別名）</h2>
+ <div class="mono" id="sample">REM 最穩（無 JSON 引號問題）&#10;curl.exe -X POST http://127.0.0.1:8787/chat -H "content-type: text/plain" --data-binary "你好"&#10;&#10;REM OpenAI 相容（已轉義）&#10;curl.exe -X POST http://127.0.0.1:8787/v1/chat/completions -H "content-type: application/json" --data "{\"model\":\"gpt-web-port\",\"messages\":[{\"role\":\"user\",\"content\":\"你好\"}],\"stream\":false}"
 
 # Python OpenAI SDK
 # from openai import OpenAI

@@ -62,15 +62,18 @@ bun start
 
 ### OpenAI 相容端點 (`/v1/chat/completions`)
 
-```bash
-curl -X POST http://127.0.0.1:8765/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gemini-web/flash",
-    "messages": [
-      {"role": "user", "content": "用一句話介紹台灣"}
-    ]
-  }'
+> Windows 終端請用 `curl.exe`（不是 `curl`，後者是 PowerShell 別名會造成 JSON 格式錯誤）或最穩的純文字 `/chat`。
+
+```powershell
+# 最穩（無 JSON 引號問題，推薦先用這個測通）：
+curl.exe -X POST http://127.0.0.1:8765/chat -H "Content-Type: text/plain" --data-binary "你好"
+
+# OpenAI 相容（已轉義，CMD / PowerShell 皆可）：
+curl.exe -X POST http://127.0.0.1:8765/v1/chat/completions -H "Content-Type: application/json" --data "{\"model\":\"gemini-web/flash\",\"messages\":[{\"role\":\"user\",\"content\":\"你好\"}]}"
+
+# PowerShell 原生：
+$body = @{ model = "gemini-web/flash"; messages = @(@{ role = "user"; content = "你好" }) } | ConvertTo-Json -Depth 5
+Invoke-RestMethod -Uri "http://127.0.0.1:8765/v1/chat/completions" -Method Post -ContentType "application/json" -Body $body
 ```
 
 ### 可用模型一覽
@@ -87,14 +90,28 @@ curl -X POST http://127.0.0.1:8765/v1/chat/completions \
 
 ## 🛠️ MCP Server 設定 (Antigravity / Cursor / Claude)
 
-在您的 MCP 設定檔（例如 `claude_desktop_config.json` 或 `cursor_mcp.json`）中加入：
+> 不用手填絕對路徑。打開 ModelDock → 右上「？」→ 複製「MCP 設定（給 AI 的一句話）」貼給你的 AI，它會自動抓取本機安裝位置並完成註冊。
+
+給 AI 的一句話（範例，實際路徑由 App 自動填入）：
+
+```text
+ModelDock 已安裝在本機的「C:\Users\Administrator\Desktop\html_test\ModelDock」，MCP 伺服器入口是「...\mcp_server.py」。請你自動偵測本機 Python（優先用同目錄 venv 或系統 python），把上述 mcp_server.py 以 stdio 方式註冊為名為 modeldock 的 MCP server，不需要我手動填絕對路徑；若路徑含空格請自動加引號處理，註冊後呼叫 mcp_doctor 回報是否就緒。
+```
+
+或一鍵自動註冊（路徑自動抓取，每個人不同也不用改）：
+
+```powershell
+& (Join-Path (Get-Location) ".venv\Scripts\python.exe") -c "from server.antigravity.installer import install_antigravity_integration; print(install_antigravity_integration())"
+```
+
+手動 JSON（僅備用，`command`/`args` 請用你本機實際路徑，Help 視窗會自動填好）：
 
 ```json
 {
   "mcpServers": {
     "modeldock": {
-      "command": "C:\\Users\\Administrator\\venv\\Scripts\\python.exe",
-      "args": ["C:\\Users\\Administrator\\Desktop\\html_test\\ModelDock\\mcp_server.py"]
+      "command": "<你的 python.exe>",
+      "args": ["<你的 ModelDock 路徑\\mcp_server.py>"]
     }
   }
 }
