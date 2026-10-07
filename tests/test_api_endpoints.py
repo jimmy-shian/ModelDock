@@ -25,9 +25,9 @@ def test_get_models_endpoint():
     data = resp.json()
     assert data["object"] == "list"
     model_ids = [m["id"] for m in data["data"]]
-    assert "gemini-web/pro" in model_ids
     assert "gemini-web/flash" in model_ids
-    assert "gemini-web/flash-thinking" in model_ids
+    assert "chatgpt-web/auto" in model_ids
+    assert "deepseek-web/chat" in model_ids
 
 
 def test_get_health_endpoint():

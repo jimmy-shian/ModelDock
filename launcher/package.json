@@ -1,8 +1,8 @@
 {
-  "name": "chatdock",
-  "version": "0.2.1",
+  "name": "modeldock",
+  "version": "0.1.0",
   "private": true,
-  "description": "ChatDock 桌面應用（Electron，內含瀏覽器，免裝 Chrome / 免 Python）",
+  "description": "ModelDock 桌面應用（Electron，內含瀏覽器，多模型統一管理）",
   "type": "commonjs",
   "main": "electron/main.cjs",
   "scripts": {
@@ -18,21 +18,13 @@
     "electron-builder": "^26.8.1"
   },
   "build": {
-    "appId": "dev.chatdock.app",
-    "productName": "ChatDock",
-    "artifactName": "ChatDock-${version}-${os}-${arch}.${ext}",
+    "appId": "dev.modeldock.app",
+    "productName": "ModelDock",
+    "artifactName": "ModelDock-${version}-${os}-${arch}.${ext}",
     "asar": true,
-    "directories": {
-      "output": "release"
-    },
-    "files": [
-      "electron/**",
-      "renderer/**",
-      "package.json"
-    ],
-    "win": {
-      "target": ["nsis"]
-    },
+    "directories": { "output": "release" },
+    "files": ["electron/**", "renderer/**", "package.json"],
+    "win": { "target": ["nsis"] },
     "nsis": {
       "oneClick": false,
       "perMachine": false,

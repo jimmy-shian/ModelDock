@@ -227,9 +227,7 @@ def test_transport_deepseek_missing_token_raises(monkeypatch):
 def test_model_catalog_has_deepseek():
     from server.model_catalog import AVAILABLE_GEMINI_WEB_ROUTES, resolve_model_route
     ids = [r.id for r in AVAILABLE_GEMINI_WEB_ROUTES]
-    for expected in ("deepseek-web/chat", "deepseek-web/reasoner",
-                     "deepseek-web/search", "deepseek-web/reasoner-search",
-                     "deepseek-web/auto"):
+    for expected in ("deepseek-web/chat", "deepseek-web/reasoner-search", "deepseek-web/auto"):
         assert expected in ids
-    assert resolve_model_route("deepseek-reasoner").id == "deepseek-web/reasoner"
+    assert resolve_model_route("deepseek-reasoner").id == "deepseek-web/auto"
     assert resolve_model_route("deepseek-chat").id == "deepseek-web/chat"

@@ -1,167 +1,131 @@
-# ChatDock
+# ModelDock
 
-把 ChatGPT 網頁版接進本機：內嵌登入頁＋自動丟資料 / 接回傳＋HTTP 埠，拿來做自動化。
+<p align="center">
+  <strong>Multi-model AI 桌面工作站 · ChatGPT + Gemini + DeepSeek 全本機免外掛自動化</strong><br>
+  OpenDesign 雙主題面板 · 內嵌多分頁瀏覽器 · 自動 Cookie / Token 萃取 · OpenAI 相容 API · 專用 MCP 分析套件
+</p>
 
-```
-你的腳本  ──POST /chat──▶  ChatDock（Electron 本地應用） ──▶  內嵌 ChatGPT 網頁
-        ◀──{ reply }────                              ◀──
-```
+---
 
-參考：https://github.com/miuuyy/codex-chatgpt-web（同樣內含瀏覽器，不依賴系統 Chrome，不用 Python）。
-本專案只取上游的登入＋輸入內容＋接回傳做法做自動化，不做 MCP、不操作使用者檔案。
+## 💡 為什麼需要 ModelDock？
 
-## 需求
+以往使用網頁版 AI（ChatGPT、Google Gemini、DeepSeek）串接本機工具或 Coding Agent（如 Cursor、Claude Desktop、Cline、Antigravity）時，常面臨兩大痛點：
+1. **Cookie 過期需手動複製**：Chrome / Edge 127+ 的 App-Bound Encryption (ABE) 導致外部程式無法直接解密瀏覽器 Cookie，使用者必須不斷依賴瀏覽器擴充套件手動點擊「匯出」。
+2. **多平台各自分散**：ChatGPT 需要一組腳本、Gemini 需要另一套 Bridge、DeepSeek 還要額外解 PoW 算力驗證。
 
-- 一般使用：Windows 10/11，直接跑根目錄的 `ChatDock-*.exe` 安裝檔即可，免裝 Chrome、免裝 Python、免裝 Bun。
-- 自行開發：需 [Bun](https://bun.sh/) 1.4+（`bun --version` 確認）。
+**ModelDock 的解決方案：**
+* **內建 Electron 專屬獨立容器**：內嵌獨立的 Chromium 分頁（[ChatGPT] [Gemini] [DeepSeek]），在應用內完成登入後，**Electron 本身即擁有解密權限，自動在背景監聽、擷取並更新 `gemini_cookies.json` 與 `deepseek_token.json`**，徹底終結手動更新與擴充套件依賴！
+* **雙通道支援**：
+  * **ChatGPT**：精確 DOM 自動化輸入、即時送出驗證、防卡死機制與無痕對話。
+  * **Gemini**：直接透過 RPC 進行串流生成，支援 Google 搜尋 Grounding、多模態圖片分析與思考鏈（Thinking）。
+  * **DeepSeek**：本地 WASM 執行 Keccak-256 PoW 解題，實現極速直連。
+* **雙通訊協議**：
+  * 標準 **OpenAI 相容 HTTP 伺服器**（`/v1/chat/completions`）。
+  * 完整 **MCP Server (Model Context Protocol)**，供 Cursor、Antigravity、Claude Desktop 調用。
 
-## 快速開始（開發模式）
+---
+
+## 🎨 介面設計（OpenDesign 規範）
+
+* **雙主題色彩**：深色模式採用 Zinc / Obsidian 極致暗黑，淺色模式採用高易讀 Slate 淨白。
+* **左右雙欄分工**：
+  * **左側 420px 操控台**：包含三模型即時連線燈號、內嵌分頁快速切換按鈕、端點一鍵複製卡、模型下拉選單與對話測試區。
+  * **右側可收合瀏覽器**：自由切換 ChatGPT / Gemini / DeepSeek 官方登入頁，可一鍵隱藏純留控制台。
+* **微互動體驗**：所有設定、端點與程式碼均支援一鍵複製與非阻塞 Toast 回饋。
+
+---
+
+## 🚀 快速開始
+
+### 1. 桌面開發模式
+需安裝 [Bun](https://bun.sh/) 1.4+：
 
 ```bash
+# 安裝依賴
+bun install
 bun install --cwd launcher
-bun start   # 開本地視窗：左邊控制面板，右邊就是 ChatGPT 登入頁
+
+# 啟動桌面應用
+bun start
 ```
 
-1. 在右邊內嵌頁登入 ChatGPT（看到輸入框就算登入）。
-2. 左側狀態變 `[已登入]`（每 5 秒自動刷新）。
-3. 在「對話測試」輸入 prompt 送出，或直接打 HTTP（見下）。
+### 2. 登入三平台（只需一次）
+1. 在右側內嵌瀏覽器分別切換分頁：`ChatGPT`、`Gemini`、`DeepSeek`。
+2. 在各官網完成帳號登入。
+3. ModelDock 會在背景自動將憑證持久保存，即使重開電腦也無需重複登入！
 
-登入態留在應用的持久 partition，重開應用還在。身份驗證彈窗留在應用內，不跳外部瀏覽器。
-右上 `?` 有使用說明視窗，每個端點都可一鍵複製；太陽圖示切換深色 / 淺色（內嵌頁跟著走）。
+---
 
-## 自動化 HTTP
+## 🌐 API 呼叫指南
 
-應用開著，HTTP 就能用。預設 `http://127.0.0.1:8787`。
+服務啟動後，本機即可透過標準 HTTP 存取：
 
-### `POST /chat`（原生）
-
-送 prompt，拿回回覆。預設每次開新對話，`continue: true` 沿用上一輪。
+### OpenAI 相容端點 (`/v1/chat/completions`)
 
 ```bash
-curl -X POST http://127.0.0.1:8787/chat \
-  -H "content-type: application/json" \
-  -d '{"prompt":"用一句話介紹台灣"}'
+curl -X POST http://127.0.0.1:8765/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gemini-web/flash",
+    "messages": [
+      {"role": "user", "content": "用一句話介紹台灣"}
+    ]
+  }'
 ```
+
+### 可用模型一覽
+
+| Model ID | Provider | 特色與後端機制 |
+| :--- | :--- | :--- |
+| `gemini-web/flash` (預設) | Google Gemini | Cookie 直連 RPC，速度極快，支援視覺與聯網 |
+| `chatgpt-web/auto` | OpenAI ChatGPT | Electron 頁面 DOM 自動化，防暫停與送出驗證 |
+| `deepseek-web/chat` | DeepSeek | 本機 WASM PoW 算力解題直連 (V3) |
+| `deepseek-web/reasoner-search` | DeepSeek | 深度推理 + 實時聯網搜尋直連 (R1) |
+| `webchat/auto` | 自動路由 | 根據當前已連線的平台自動分派 |
+
+---
+
+## 🛠️ MCP Server 設定 (Antigravity / Cursor / Claude)
+
+在您的 MCP 設定檔（例如 `claude_desktop_config.json` 或 `cursor_mcp.json`）中加入：
 
 ```json
 {
-  "reply": "台灣是位於東亞的島嶼，以科技產業、美食與多元文化聞名。",
-  "conversationUrl": "https://chatgpt.com/c/8f2a…",
-  "durationMs": 6420
+  "mcpServers": {
+    "modeldock": {
+      "command": "C:\\Users\\Administrator\\venv\\Scripts\\python.exe",
+      "args": ["C:\\Users\\Administrator\\Desktop\\html_test\\ModelDock\\mcp_server.py"]
+    }
+  }
 }
 ```
 
-純文字 body 也行，方便 shell 管線：
+可使用的專屬分析工具：
+* `webchat_analyze_code`：多檔案高階架構分析與程式碼審查。
+* `webchat_ask`：調用深度思考進行演算法複雜度諮詢。
+* `webchat_multimodal_inspect`：傳遞本機截圖進行 UI 樣式與視覺排版診斷。
+* `webchat_web_search`：結合 Google 即時搜尋最新文檔與 API。
 
-```bash
-curl -X POST http://127.0.0.1:8787/chat -H "content-type: text/plain" -d "1+1=?"
+---
+
+## 📦 Windows 一鍵打包
+
+雙擊執行根目錄的 `build-win.bat`：
+1. 自動清除舊產物與快取。
+2. 編譯 Electron 安裝程式。
+3. 產出 `ModelDock-*-win-*.exe` 獨立安裝檔。
+
+---
+
+## 🧪 測試與驗證
+
+ModelDock 具備 102 項單元測試，完整覆蓋 MCP 協定、WASM PoW 解題、串流配接與沙箱安全：
+
+```powershell
+& "C:\Users\Administrator\venv\Scripts\python.exe" -m pytest tests -q
 ```
 
-### `GET /health` / `GET /ready`
+---
 
-```bash
-curl http://127.0.0.1:8787/health
-```
-
-```json
-{ "ok": true, "browserStarted": true, "loggedIn": true, "pageUrl": "https://chatgpt.com/" }
-```
-
-`loggedIn` 是 `false` 就去應用右側登入頁登入。
-
-### OpenAI 相容
-
-`BaseURL = http://127.0.0.1:8787/v1`，`Model = gpt-web-port`，`API Key` 有設才需填。
-
-```bash
-curl -X POST http://127.0.0.1:8787/v1/chat/completions \
-  -H "content-type: application/json" \
-  -d '{"model":"gpt-web-port","messages":[{"role":"user","content":"你好"}],"stream":false}'
-```
-
-```python
-from openai import OpenAI
-c = OpenAI(base_url="http://127.0.0.1:8787/v1", api_key="not-needed")
-print(c.chat.completions.create(model="gpt-web-port", messages=[{"role": "user", "content": "你好"}]).choices[0].message.content)
-```
-
-支援 `stream: true`（SSE 假串流：等整段回來再切塊送）。`temperature` / `max_tokens` 會接受但網頁版無法真正套用。
-
-## 命令列（免視窗，舊路徑）
-
-`src/` 是 Playwright＋系統 Chrome 的舊路徑，保留相容，正式請用 Electron 應用。
-
-```bash
-bun run src/cli.ts serve    # 純 HTTP 後端（瀏覽器開 http://127.0.0.1:8787/ 看 UI）
-bun run src/cli.ts login    # 開真 Chrome 手動登入（登入後把 Chrome 完全關掉即完成）
-bun run src/cli.ts ask "用一句話介紹台灣"
-bun run src/cli.ts status   # 檢查登入狀態
-bun run src/cli.ts logout   # 清除登入狀態
-```
-
-## 環境變數
-
-| 變數 | 預設 | 說明 |
-| --- | --- | --- |
-| `PORT` | `8787` | 監聽埠號 |
-| `HOST` | `127.0.0.1` | 監聽位址。改 `0.0.0.0` 可讓區網其他裝置呼叫 |
-| `API_KEY` | 無 | 設定後請求必須帶 `x-api-key`（或 `Authorization: Bearer`） |
-| `TURN_TIMEOUT_MS` | `300000` | 單次問答逾時（毫秒） |
-
-範例：
-
-```bash
-HOST=0.0.0.0 PORT=9000 API_KEY=my-secret bun start
-```
-
-以下只對舊 `src/` 路徑有效：`HEADLESS`、`CHROME_PATH`、`PROFILE_DIR`、`STORAGE_STATE`。
-
-## 一鍵打包（Windows）
-
-雙擊根目錄 `build-win.bat`，它會依序做完：
-
-1. 清除舊編譯產物（根目錄舊安裝檔、`launcher/release`、殘留 `build/` `dist/`）
-2. `bun install`（根＋launcher）
-3. `electron-builder --win` 編譯安裝檔
-4. 把 `ChatDock-*-win-*.exe` 複製到根目錄顯示，並刪掉 `launcher/release` 中間產物
-
-結束後根目錄只留一個安裝檔，雙擊即安裝。手動等價指令：`bun run --cwd launcher package:win`（產物在 `launcher/release`）。
-
-## 錯誤回應
-
-| 狀態碼 | `error` | 原因 |
-| --- | --- | --- |
-| `400` | `bad_request` | body 沒帶 prompt |
-| `401` | `unauthorized` | `API_KEY` 不符 |
-| `401` | `not_logged_in` | 還沒登入 ChatGPT |
-| `502` | `chatgpt_error` | 網頁操作失敗，詳情看 `message` |
-
-## 注意
-
-- 請求是排隊處理的，同一時間只跑一個問答，同時送多個會依序完成。
-- ChatGPT 改了網頁結構就要更新 selector（Electron 版在 [`launcher/electron/automation.cjs`](launcher/electron/automation.cjs)，舊版在 [`src/chatgpt.ts`](src/chatgpt.ts)）。
-- 設了 `HOST=0.0.0.0` 等於把你的 ChatGPT 帳號開在區網上，務必搭配 `API_KEY`。
-
-## 專案結構
-
-```
-launcher/
-  electron/
-    main.cjs        應用主程式：視窗＋內嵌頁＋自動化＋HTTP
-    automation.cjs  上游 selector＋頁面內執行的輸入/讀取/狀態 JS
-    preload.cjs     面板與主程式的 IPC 橋
-  renderer/         左側控制面板（狀態自動刷新＋說明視窗＋深淺色）
-  package.json      Electron 應用＋electron-builder 打包設定
-src/                舊路徑（Playwright＋系統 Chrome，保留相容）
-  cli.ts            serve / login / ask / status / logout
-  server.ts         HTTP API（原生＋OpenAI 相容＋Web UI）
-  chatgpt.ts        Playwright 驅動 ChatGPT 網頁版
-  config.ts         設定與 Chrome 路徑偵測
-  openai.ts         OpenAI 相容轉接
-  ui.ts             Web 版設定介面
-build-win.bat       一鍵打包：清產物→編譯→exe 複製到根目錄
-```
-
-## 倉庫
-
-https://github.com/jimmy-shian/ChatDock
+## 📄 License
+MIT License.

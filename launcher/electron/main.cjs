@@ -6,10 +6,19 @@
 const { app, BrowserWindow, WebContentsView, ipcMain, session, nativeTheme, Tray, Menu, nativeImage } = require("electron");
 const http = require("node:http");
 const path = require("node:path");
+const fs = require("node:fs");
 const auto = require("./automation.cjs");
 
+const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PARTITION = "persist:gpt-web-port";
 const PANEL_WIDTH = 420;
+
+const PROVIDER_URLS = {
+  chatgpt: () => currentChatUrl(),
+  gemini: () => "https://gemini.google.com/",
+  deepseek: () => "https://chat.deepseek.com/",
+};
+let activeProvider = "chatgpt";
 
 const HOST = (process.env.HOST || "127.0.0.1").trim() || "127.0.0.1";
 const PORT = Number(process.env.PORT || 8787) || 8787;
@@ -32,6 +41,66 @@ let loginVisible = true;
 let temporaryChat = process.env.TEMPORARY_CHAT !== "0";
 function currentChatUrl() {
   return temporaryChat ? auto.CHAT_URL : "https://chatgpt.com/";
+}
+
+// ---------- 全自動本地憑證擷取（免擴充套件核心） ----------
+async function harvestGeminiCookies() {
+  try {
+    const ses = session.fromPartition(PARTITION);
+    const cookies = await ses.cookies.get({ domain: ".google.com" });
+    let psid = "";
+    let psidts = "";
+    for (const c of cookies) {
+      if (c.name === "__Secure-1PSID") psid = c.value;
+      if (c.name === "__Secure-1PSIDTS") psidts = c.value;
+    }
+    if (psid) {
+      const targetFile = path.join(WORKSPACE_ROOT, "gemini_cookies.json");
+      let current = {};
+      try { if (fs.existsSync(targetFile)) current = JSON.parse(fs.readFileSync(targetFile, "utf-8")); } catch {}
+      if (current["1psid"] !== psid || current["1psidts"] !== psidts) {
+        fs.writeFileSync(targetFile, JSON.stringify({ "1psid": psid, "1psidts": psidts }, null, 2), "utf-8");
+        console.log("[modeldock] 自動同步 gemini_cookies.json 成功！");
+      }
+      return { ok: true, synced: true, psid: !!psid, psidts: !!psidts };
+    }
+  } catch (err) {
+    console.error("[modeldock] 擷取 Gemini Cookie 錯誤:", err);
+  }
+  return { ok: false };
+}
+
+async function harvestDeepSeekToken() {
+  try {
+    if (!chatView) return { ok: false };
+    const url = chatView.webContents.getURL() || "";
+    if (url.includes("deepseek.com")) {
+      const token = await runJS(chatView, `(function(){
+        try {
+          const raw = localStorage.getItem("userToken");
+          if (!raw) return null;
+          const parsed = JSON.parse(raw);
+          return (parsed && parsed.value) || raw;
+        } catch(e) {
+          return localStorage.getItem("userToken");
+        }
+      })()`);
+      if (token && typeof token === "string" && token.length > 10) {
+        const targetFile = path.join(WORKSPACE_ROOT, "deepseek_token.json");
+        fs.writeFileSync(targetFile, JSON.stringify({ "token": token }, null, 2), "utf-8");
+        console.log("[modeldock] 自動同步 deepseek_token.json 成功！");
+        return { ok: true, synced: true };
+      }
+    }
+  } catch (err) {
+    console.error("[modeldock] 擷取 DeepSeek Token 錯誤:", err);
+  }
+  return { ok: false };
+}
+
+async function harvestAllCredentials() {
+  await harvestGeminiCookies();
+  await harvestDeepSeekToken();
 }
 let queue = Promise.resolve();
 let tray = null;
@@ -117,13 +186,44 @@ async function ensureChatLoaded() {
 
 async function checkLogin() {
   try {
-    const url = chatView.webContents.getURL();
-    const composer = await runJS(chatView, auto.probeComposerJS());
+    await harvestAllCredentials();
+    const url = chatView ? chatView.webContents.getURL() : "";
+    let composer = false;
     let sessionAuth = null;
     if (/^https:\/\/chatgpt\.com\//.test(url)) {
+      composer = (await runJS(chatView, auto.probeComposerJS())) === true;
       sessionAuth = await runJS(chatView, auto.checkAuthSessionJS());
     }
-    return { loggedIn: composer === true, url, sessionAuth, loginVisible, temporaryChat };
+
+    const geminiPath = path.join(WORKSPACE_ROOT, "gemini_cookies.json");
+    let hasGemini = false;
+    try {
+      if (fs.existsSync(geminiPath)) {
+        const g = JSON.parse(fs.readFileSync(geminiPath, "utf-8"));
+        hasGemini = Boolean(g["1psid"]);
+      }
+    } catch {}
+
+    const dsPath = path.join(WORKSPACE_ROOT, "deepseek_token.json");
+    let hasDeepSeek = false;
+    try {
+      if (fs.existsSync(dsPath)) {
+        const d = JSON.parse(fs.readFileSync(dsPath, "utf-8"));
+        hasDeepSeek = Boolean(d.token || d.userToken);
+      }
+    } catch {}
+
+    return {
+      loggedIn: composer === true,
+      chatgpt: composer === true,
+      gemini: hasGemini,
+      deepseek: hasDeepSeek,
+      activeProvider,
+      url,
+      sessionAuth,
+      loginVisible,
+      temporaryChat,
+    };
   } catch (e) {
     return { loggedIn: false, url: "", error: String((e && e.message) || e) };
   }
@@ -537,6 +637,31 @@ async function createWindow() {
     await chatView.webContents.loadURL(currentChatUrl());
     return { ok: true };
   });
+
+  // 多模型切換與憑證同步 IPC
+  ipcMain.handle("switch-browser-tab", async (_e, provider) => {
+    if (PROVIDER_URLS[provider]) {
+      activeProvider = provider;
+      if (chatView) {
+        const targetUrl = PROVIDER_URLS[provider]();
+        await chatView.webContents.loadURL(targetUrl);
+      }
+      return { ok: true, activeProvider };
+    }
+    return { ok: false, error: "unknown provider" };
+  });
+  ipcMain.handle("sync-gemini-cookies", async () => {
+    return harvestGeminiCookies();
+  });
+  ipcMain.handle("sync-deepseek-token", async () => {
+    return harvestDeepSeekToken();
+  });
+
+  // 頁面載入完成時與背景定時器自動擷取憑證
+  chatView.webContents.on("did-finish-load", () => {
+    harvestAllCredentials();
+  });
+  setInterval(harvestAllCredentials, 25000);
 
   // 按 X 不結束：收到托盤繼續跑 HTTP，這樣沒開視窗也能送出。
   mainWin.on("close", (e) => {
