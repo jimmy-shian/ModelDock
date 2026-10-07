@@ -24,3 +24,9 @@ Thumbs.db
 .DS_Store
 
 bun.lock
+
+# Launcher packaging icons（electron-builder files 含 build/**，fresh clone 需要）
+!launcher/build/
+launcher/build/*
+!launcher/build/icon.ico
+!launcher/build/icon.png

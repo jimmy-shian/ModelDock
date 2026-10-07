@@ -23,15 +23,23 @@
     "artifactName": "ModelDock-${version}-${os}-${arch}.${ext}",
     "asar": true,
     "directories": { "output": "release" },
-    "files": ["electron/**", "renderer/**", "package.json"],
-    "win": { "target": ["nsis"] },
+    "files": ["electron/**", "renderer/**", "build/**", "package.json"],
+    "icon": "build/icon",
+    "win": {
+      "target": ["nsis"],
+      "icon": "build/icon.ico",
+      "requestedExecutionLevel": "asInvoker"
+    },
     "nsis": {
       "oneClick": false,
       "perMachine": false,
       "allowElevation": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "runAfterFinish": true
+      "shortcutName": "ModelDock",
+      "runAfterFinish": true,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico"
     }
   }
 }
