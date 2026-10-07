@@ -229,6 +229,13 @@ window.addEventListener("message", (event) => {
     const stripped = stripConduitToken(msg.full_text);
     console.log(`[WebChat Bridge][NET-DONE] raw_len=${(msg.full_text||"").length} stripped_len=${stripped.length}`);
     if (!stripped) return;
+    // Telemetry ACKs ({"success":true} etc.) are never the answer. Drop them
+    // so a stray telemetry stream can't complete the turn with garbage; the
+    // real answer stream (or DOM fallback) still owns completion.
+    if (/^\{\s*"(success|status|ok)"\s*:/.test(stripped) && stripped.length < 300) {
+      console.log(`[WebChat Bridge][NET-DONE] telemetry ACK suppressed, waiting for real stream...`);
+      return;
+    }
     rawForwarded = true;
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({

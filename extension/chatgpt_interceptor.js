@@ -78,6 +78,12 @@
       "/moderation", "/telemetry", "/sentinel", "/gen_title", "/lat", "/statsig",
       "/login", "/auth", "/signup", "/token", "/oauth", "/sentry", "/beacon",
       "/rum", "/cdn-cgi", "analytics", ".js", ".css", ".woff", "fonts",
+      // Client-event telemetry + handshake endpoints: they answer tiny JSON
+      // like {"success":true} / {"conduit_token":"..."} which is NEVER the
+      // assistant answer. Capturing them lets a telemetry ACK win the turn
+      // (verified: https://chatgpt.com/ces/v1/t returned {"success":true}
+      // and completed the turn with garbage).
+      "/ces/", "ces/v1", "/conversation/prepare", "prepare?lightweight",
     ];
     return !EXCLUDES.some((p) => lower.includes(p));
   }
@@ -150,6 +156,17 @@
     const t = String(s || "").trim();
     if (!t.startsWith("{")) return false;
     return t.indexOf('"conduit_token"') >= 0 || t.indexOf('"conduit_uuid"') >= 0;
+  }
+
+  // Telemetry-shaped ACKs ({"success":true}, {"status":"ok",...}) are transport
+  // receipts, never the assistant answer. A processor stuck with only such a
+  // payload must die silently so the real answer stream can own the turn.
+  function looksLikeTelemetryAck(s) {
+    const t = String(s || "").trim();
+    if (!t.startsWith("{") || t.length > 300) return false;
+    if (!/^\{\s*"(success|status|ok)"\s*:/.test(t)) return false;
+    // A real answer never serializes to a single tiny flat JSON object.
+    return /^[^{}]*$/.test(t.slice(1, -1).replace(/"(?:[^"\\]|\\.)*"/g, ""));
   }
 
   // ---------- SSE (backend-api/conversation) parsing ----------
@@ -377,6 +394,11 @@
         if (lockedStreamKey === streamKeyVal) lockedStreamKey = null;
         return;
       }
+      if (looksLikeTelemetryAck(finalText)) {
+        console.log(`[ChatGPT-Interceptor] DONE telemetry ACK detected, suppressing (real stream owns the turn)`);
+        if (lockedStreamKey === streamKeyVal) lockedStreamKey = null;
+        return;
+      }
       postToContent({ type: "done", request_id: reqId, full_text: finalText });
     }
 
@@ -410,6 +432,14 @@
         return;
       }
       accumulatedRaw += chunkText;
+      // Telemetry ACK (e.g. {"success":true} from ces/v1/t) that slipped past
+      // the URL filter: kill this processor silently, never let it own done.
+      if (looksLikeTelemetryAck(accumulatedRaw)) {
+        finished = true;
+        console.log(`[ChatGPT-Interceptor] TELEMETRY SKIP (${accumulatedRaw.length} chars), releasing stream`);
+        if (lockedStreamKey === streamKeyVal) lockedStreamKey = null;
+        return;
+      }
       console.log(`[ChatGPT-Interceptor] FEED chunk=${chunkText.length} accumulated=${accumulatedRaw.length} mode=${mode || "?"}`);
 
       if (!mode) {
