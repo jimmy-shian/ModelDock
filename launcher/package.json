@@ -1,0 +1,45 @@
+{
+  "name": "chatdock",
+  "version": "0.2.1",
+  "private": true,
+  "description": "ChatDock 桌面應用（Electron，內含瀏覽器，免裝 Chrome / 免 Python）",
+  "type": "commonjs",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "typecheck": "node --check electron/main.cjs && node --check electron/preload.cjs && node --check electron/automation.cjs",
+    "package:win": "electron-builder --win",
+    "dist": "electron-builder"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "electron": "41.10.7",
+    "electron-builder": "^26.8.1"
+  },
+  "build": {
+    "appId": "dev.chatdock.app",
+    "productName": "ChatDock",
+    "artifactName": "ChatDock-${version}-${os}-${arch}.${ext}",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "electron/**",
+      "renderer/**",
+      "package.json"
+    ],
+    "win": {
+      "target": ["nsis"]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "runAfterFinish": true
+    }
+  }
+}

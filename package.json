@@ -1,0 +1,34 @@
+{
+  "name": "chatdock",
+  "version": "0.1.1",
+  "private": true,
+  "description": "ChatDock：把 ChatGPT 網頁版接進本機（內嵌登入頁＋自動丟收＋HTTP/OpenAI 相容）。",
+  "type": "module",
+  "bin": {
+    "gpt-web-port": "./src/cli.ts"
+  },
+  "scripts": {
+    "start": "bun run --cwd launcher start",
+    "app": "bun run --cwd launcher start",
+    "dev": "bun run --cwd launcher dev",
+    "serve": "bun run src/cli.ts serve",
+    "login": "bun run src/cli.ts login",
+    "ask": "bun run src/cli.ts ask",
+    "ui": "bun run src/cli.ts serve",
+    "typecheck": "bun x --no-install --bun tsc --noEmit",
+    "launcher:install": "bun install --cwd launcher",
+    "package:win": "bun run --cwd launcher package:win",
+    "dist": "bun run --cwd launcher dist"
+  },
+  "dependencies": {
+    "playwright-core": "^1.62.0"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.0",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "bun": "1.4.0"
+  },
+  "license": "MIT"
+}

@@ -1,37 +1,14 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
-*.spec
-
-# PyInstaller Build & Dist artifacts
-build/
+node_modules/
 dist/
-
-# Log files (Zero disk wear principle)
-*.log
-server_out.log
-server_err.log
-
-# Temporary test artifacts
-page_snapshot.png
-
-# Agent & Editor configs
-.agents/
-.vscode/
-.idea/
-.kilocode/
+build/
+launcher/release/
+launcher/dist/
+# 打包產出的安裝檔不進倉庫，改放 GitHub Release（手動上傳）
+ChatDock-*.exe
 .DS_Store
-Thumbs.db
-
-# Credentials / cookies (never commit)
-gemini_cookies.json
-deepseek_token.json
-*.pem
-*.key
-*.pfx
-*.p12
 .env
-.env.local
-credentials.json
-.codex-chatgpt-web
+*.log
+*.pid
+*.spec
+__pycache__/
+app/icon.ico
