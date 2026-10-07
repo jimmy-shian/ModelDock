@@ -46,6 +46,7 @@
   <div class="card-head">
     <h2>內嵌瀏覽器</h2>
     <div class="card-actions">
+      <button class="btn-ghost" id="btnReloadPage" title="內嵌頁找不到輸入框或卡住時按此重載（保留登入態）">重整內嵌頁</button>
       <button class="btn-ghost" id="btnToggleLogin" aria-pressed="true">隱藏登入頁</button>
     </div>
   </div>
@@ -54,7 +55,7 @@
     <button class="tab-btn" data-provider="gemini" id="tabBtnGemini">Gemini</button>
     <button class="tab-btn" data-provider="deepseek" id="tabBtnDeepSeek">DeepSeek</button>
   </div>
-  <div class="hint-text">在右側完成各平台登入，Electron 自動擷取 Cookie 與 Token，免外掛全本機自動化。</div>
+  <div class="hint-text">右側三頁常駐免重載、秒切。ChatGPT 可免登入用無痕對話；Gemini / DeepSeek 需先登入一次，之後自動同步憑證。</div>
 </div>
 
 <!-- Service Endpoints -->
@@ -99,29 +100,35 @@
   <div class="form-row">
     <div class="form-group flex-1">
       <label class="form-label">模型</label>
-      <div class="select-wrap">
-        <select id="modelSelect">
-          <optgroup label="ChatGPT (Electron DOM 自動化)">
-            <option value="chatgpt-web/auto">chatgpt-web/auto</option>
-          </optgroup>
-          <optgroup label="Gemini (Cookie 直連)">
-            <option value="gemini-web/flash" selected>gemini-web/flash</option>
-          </optgroup>
-          <optgroup label="DeepSeek (Token + PoW 直連)">
-            <option value="deepseek-web/chat">deepseek-web/chat</option>
-            <option value="deepseek-web/reasoner">deepseek-web/reasoner</option>
-          </optgroup>
-        </select>
+      <div class="custom-select" id="modelSelect" data-value="gemini-web/flash">
+        <div class="select-trigger" tabindex="0" role="button" aria-haspopup="listbox" aria-expanded="false">
+          <span class="select-label">gemini-web/flash</span>
+          <div class="arrow"></div>
+        </div>
+        <div class="select-options" role="listbox">
+          <div class="option-group">ChatGPT（Electron DOM 自動化）</div>
+          <div class="option" data-value="chatgpt-web/auto" role="option">chatgpt-web/auto</div>
+          <div class="option-group">Gemini（Cookie 直連）</div>
+          <div class="option selected" data-value="gemini-web/flash" role="option">gemini-web/flash</div>
+          <div class="option-group">DeepSeek（Token + PoW 直連）</div>
+          <div class="option" data-value="deepseek-web/chat" role="option">deepseek-web/chat</div>
+          <div class="option" data-value="deepseek-web/reasoner" role="option">deepseek-web/reasoner</div>
+        </div>
       </div>
     </div>
     <div class="form-group flex-1">
       <label class="form-label">對話模式</label>
-      <div class="select-wrap">
-        <select id="chatMode">
-          <option value="temporary">無痕（不留紀錄）</option>
-          <option value="normal">一般（保留紀錄）</option>
-        </select>
+      <div class="custom-select" id="chatMode" data-value="temporary">
+        <div class="select-trigger" tabindex="0" role="button" aria-haspopup="listbox" aria-expanded="false">
+          <span class="select-label">無痕（不留紀錄）</span>
+          <div class="arrow"></div>
+        </div>
+        <div class="select-options" role="listbox">
+          <div class="option selected" data-value="temporary" role="option">無痕（不留紀錄）</div>
+          <div class="option" data-value="normal" role="option">一般（保留紀錄）</div>
+        </div>
       </div>
+      <div class="hint-text" id="chatModeHint" style="margin-top:4px">登入後仍開無痕對話，不留紀錄；切一般才會保留。</div>
     </div>
   </div>
 

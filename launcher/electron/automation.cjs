@@ -7,9 +7,19 @@ const COMPOSER_SELECTOR = [
   "#prompt-textarea",
   '[contenteditable="true"][data-lexical-editor="true"]',
   'form[data-chatgpt-composer] [data-composer-markdown][contenteditable="true"][role="textbox"]',
+  // 訪客/未登入首頁與改版兜底：由精確到寬鬆，最後兩個是通用備援
+  'div[contenteditable="true"][role="textbox"]',
+  'textarea[placeholder]',
+  'div[contenteditable="true"]',
 ].join(", ");
 
-const SEND_BUTTON_SELECTOR = '[data-testid="send-button"], button[type="submit"]';
+const SEND_BUTTON_SELECTOR = [
+  '[data-testid="send-button"]',
+  'button[type="submit"]',
+  'button[aria-label*="Send"]',
+  'button[aria-label*="傳送"]',
+  'form[data-chatgpt-composer] button[type="button"]',
+].join(", ");
 
 const STOP_BUTTON_SELECTOR =
   '[data-testid="stop-button"], form[data-chatgpt-composer] button[type="button"][aria-label="Stop"]';
@@ -47,6 +57,35 @@ function __probeComposer() {
     if (els.length > 0) return true;
   }
   return false;
+}
+
+// 診斷用：回報哪個 selector 命中、可見輸入框數量、頁面概況（URL 由主程式另取）。
+function __findComposer() {
+  const sels = __COMPOSER_SEL.split("|||");
+  const hits = [];
+  for (const sel of sels) {
+    let n = 0;
+    try {
+      n = Array.from(document.querySelectorAll(sel)).filter(
+        (el) => el.getClientRects().length > 0,
+      ).length;
+    } catch (e) { n = -1; }
+    hits.push({ sel, n });
+  }
+  const editables = Array.from(document.querySelectorAll('[contenteditable="true"]')).filter(
+    (el) => el.getClientRects().length > 0,
+  ).length;
+  const textareas = Array.from(document.querySelectorAll("textarea")).filter(
+    (el) => el.getClientRects().length > 0,
+  ).length;
+  const loginBtn = !!document.querySelector('button[data-testid*="login"], a[href*="auth/login"]');
+  return {
+    found: hits.some((h) => h.n > 0),
+    hits,
+    editables,
+    textareas,
+    title: document.title || "",
+  };
 }
 
 function __countAssistant() {
@@ -132,6 +171,8 @@ module.exports = {
   MARKDOWN_SELECTOR,
   probeComposerJS: () =>
     fnSource(__probeComposer, { __COMPOSER_SEL: COMPOSER_SELECTOR.split(", ").join("|||") }),
+  findComposerJS: () =>
+    fnSource(__findComposer, { __COMPOSER_SEL: COMPOSER_SELECTOR.split(", ").join("|||") }),
   countAssistantJS: () => fnSource(__countAssistant, { __ASSISTANT_SEL: ASSISTANT_TURN_SELECTOR }),
   readLastAssistantJS: () =>
     fnSource(__readLastAssistant, {

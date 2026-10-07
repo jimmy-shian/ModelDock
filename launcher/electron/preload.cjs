@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('modelDock', {
   ask: (prompt, continueConversation) =>
     ipcRenderer.invoke('ask', { prompt, continueConversation: !!continueConversation }),
   newChat: () => ipcRenderer.invoke('new-chat'),
+  reloadBrowserTab: () => ipcRenderer.invoke('reload-browser-tab'),
+  debugComposer: () => ipcRenderer.invoke('debug-composer'),
   setTheme: (t) => ipcRenderer.invoke('set-theme', t),
   setTemporaryChat: (temporary) => ipcRenderer.invoke('set-temporary-chat', !!temporary),
 
@@ -16,4 +18,5 @@ contextBridge.exposeInMainWorld('modelDock', {
   syncGeminiCookies: () => ipcRenderer.invoke('sync-gemini-cookies'),
   syncDeepSeekToken: () => ipcRenderer.invoke('sync-deepseek-token'),
   switchBrowserTab: (provider) => ipcRenderer.invoke('switch-browser-tab', provider),
+  getPaths: () => ipcRenderer.invoke('get-paths'),
 });
