@@ -137,6 +137,10 @@ def resolve_model_route(model_id: Optional[str]) -> GeminiWebModelRoute:
 def get_openai_model_catalog() -> List[Dict[str, Any]]:
     """
     Formats the model catalog into the standard OpenAI /v1/models response structure.
+
+    NOTE: aliases in MODEL_ALIAS_MAP are intentionally NOT advertised here.
+    They remain resolvable via resolve_model_route() for backward compat,
+    but /v1/models only lists canonical routes to avoid confusion.
     """
     catalog = []
     for route in AVAILABLE_GEMINI_WEB_ROUTES:
@@ -156,26 +160,5 @@ def get_openai_model_catalog() -> List[Dict[str, Any]]:
             "supports_tools": route.supports_tools,
             "pricing": {"prompt": "0", "completion": "0"},
         })
-
-    # Add standard aliases
-    for alias, target in MODEL_ALIAS_MAP.items():
-        if not any(m["id"] == alias for m in catalog):
-            target_route = resolve_model_route(target)
-            catalog.append({
-                "id": alias,
-                "object": "model",
-                "created": 1740000000,
-                "owned_by": "gemini-web",
-                "permission": [],
-                "root": target_route.id,
-                "parent": target_route.id,
-                "display_name": f"{alias} (-> {target_route.display_name})",
-                "description": f"Alias routing to {target_route.id}",
-                "context_window": target_route.context_window,
-                "max_output_tokens": target_route.max_output_tokens,
-                "supports_thinking": target_route.supports_thinking,
-                "supports_tools": target_route.supports_tools,
-                "pricing": {"prompt": "0", "completion": "0"},
-            })
 
     return catalog
