@@ -165,6 +165,7 @@ def test_chatgpt_model_both_tabs_routes_chatgpt(cleanthings, monkeypatch):
 
 def test_chatgpt_model_gemini_only_raises(cleanthings, monkeypatch):
     monkeypatch.setattr(tmod, "direct_is_configured", lambda: True)
+    monkeypatch.setattr(tmod, "_electron_reachable", lambda timeout=0.5: False)
     tmod.set_mode("auto")
     _add_tab("gemini")
 
@@ -174,10 +175,34 @@ def test_chatgpt_model_gemini_only_raises(cleanthings, monkeypatch):
 
 def test_chatgpt_model_no_connection_raises(cleanthings, monkeypatch):
     monkeypatch.setattr(tmod, "direct_is_configured", lambda: False)
+    monkeypatch.setattr(tmod, "_electron_reachable", lambda timeout=0.5: False)
     tmod.set_mode("auto")
 
     with pytest.raises(tmod.TransportUnavailable):
         tmod.resolve_turn(prompt="hi", model="chatgpt-web/gpt-4o")
+
+
+def test_chatgpt_model_falls_back_to_electron_app(cleanthings, monkeypatch):
+    """無擴充套件但 Electron 在線 -> electron-app 轉發，不再 503。"""
+    monkeypatch.setattr(tmod, "direct_is_configured", lambda: False)
+    monkeypatch.setattr(tmod, "_electron_reachable", lambda timeout=0.5: True)
+    tmod.set_mode("auto")
+
+    _, name = tmod.resolve_turn(prompt="hi", model="chatgpt-web/auto")
+
+    assert name == "electron-app"
+    assert not cleanthings["calls"]
+
+
+def test_gpt_web_port_alias_routes_electron_app(cleanthings, monkeypatch):
+    """Electron 側模型名 (gpt-web-port) 打到 8765 也視為 ChatGPT 轉發。"""
+    monkeypatch.setattr(tmod, "direct_is_configured", lambda: False)
+    monkeypatch.setattr(tmod, "_electron_reachable", lambda timeout=0.5: True)
+    tmod.set_mode("auto")
+
+    _, name = tmod.resolve_turn(prompt="hi", model="gpt-web-port")
+
+    assert name == "electron-app"
 
 
 def test_generic_extension_mode_single_tab_platform(cleanthings, monkeypatch):
