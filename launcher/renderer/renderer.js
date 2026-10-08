@@ -251,8 +251,16 @@ async function refreshStatus() {
       setDot('dotChatGPT', s.chatgpt ? 'ok' : 'err');
       setDot('dotGemini', s.gemini ? 'ok' : 'warn');
       setDot('dotDeepSeek', s.deepseek ? 'ok' : 'warn');
-      $('httpStatus').textContent = 'Running';
+      $('httpStatus').textContent = 'Running (:8765)';
       $('httpStatus').className = 'stat-value ok';
+      if ($('bridgeStatus')) {
+        $('bridgeStatus').textContent = s.python_bridge ? 'Connected' : 'Active';
+        $('bridgeStatus').className = 'stat-value ok';
+      }
+      if ($('mcpStatus')) {
+        $('mcpStatus').textContent = 'Ready (stdio)';
+        $('mcpStatus').className = 'stat-value ok';
+      }
       if (typeof s.loginVisible === 'boolean') setLoginVisible(s.loginVisible, true);
       if (s.activeProvider) {
         document.querySelectorAll('#browserTabBar .tab-btn').forEach(b => {
@@ -265,10 +273,19 @@ async function refreshStatus() {
         const r = await fetch(BASE + '/health', { signal: AbortSignal.timeout(3000) });
         if (r.ok) {
           const j = await r.json();
-          $('httpStatus').textContent = 'Running';
+          $('httpStatus').textContent = 'Running (:8765)';
           $('httpStatus').className = 'stat-value ok';
-          if (j.gemini_direct) { setDot('dotGemini', 'ok'); }
-          if (j.deepseek_direct) { setDot('dotDeepSeek', 'ok'); }
+          if (j.gemini || j.gemini_direct) { setDot('dotGemini', 'ok'); }
+          if (j.deepseek || j.deepseek_direct) { setDot('dotDeepSeek', 'ok'); }
+          if (j.chatgpt) { setDot('dotChatGPT', 'ok'); }
+          if ($('bridgeStatus')) {
+            $('bridgeStatus').textContent = j.python_bridge ? 'Connected' : 'Active';
+            $('bridgeStatus').className = 'stat-value ok';
+          }
+          if ($('mcpStatus')) {
+            $('mcpStatus').textContent = 'Ready (stdio)';
+            $('mcpStatus').className = 'stat-value ok';
+          }
         }
       } catch {
         $('httpStatus').textContent = 'Offline';

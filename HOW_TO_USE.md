@@ -1,16 +1,18 @@
-# WebChat2Local 使用指南 (HOW TO USE)
+# ModelDock 使用指南 (HOW TO USE)
 
-本指南詳細說明如何將 **WebChat2Local** 作為本地 **專用分析 MCP 伺服器 (Model Context Protocol)** 或 **OpenAI 相容 API** 使用。
+本指南詳細說明如何將 **ModelDock** 作為本地 **統一 AI 桌面工作站**、**專用分析 MCP 伺服器 (Model Context Protocol)** 或 **OpenAI 相容 API (端口 8765)** 使用。
 
 ---
 
-## 📌 核心架構理念：為什麼使用 MCP 模式？
+## 📌 核心架構理念：為什麼使用 ModelDock？
 
-在實際使用 Cline 或 Kilo Code 時，若將 Gemini Web 設為「主驅動模型 (Driver Model)」，常會因為網頁端的簡答與總結性語氣，在剛讀取目錄或一兩個檔案後就發送 `attempt_completion` 提早結束任務。
+在實際使用 Cline、Cursor、Kilo Code 等 AI Coding Agent 時，若將網頁端直接當作主模型，常面臨 Cookie 時常過期、需頻繁開外部擴充套件匯出、多平台端口混亂（8787/8765 分散）等問題。
 
-**最佳解法：MCP 分析工具模式**
-- **主驅動 Agent**：使用你原本最強的主模型（例如 Claude 3.7 Sonnet / GPT-4o / DeepSeek V3），由它掌控整個任務流程與多輪步驟。
-- **Gemini Web (本專案)**：作為專用的 **MCP 分析工具伺服器**，專注為主力模型提供超長 Context 的多檔案深度審查、截圖視覺分析、深度思考諮詢以及 Google 聯網檢索。
+**ModelDock 的統一整理解決方案：**
+- **單一 8765 統一閘道**：全面捨棄 8787 端口，外部程式、IDE、curl 測試全面對齊 `http://127.0.0.1:8765/v1`。
+- **免裝擴充套件，本地自動抓取憑證**：內建 Chromium 容器分頁，直接在應用內登入 Google Gemini、DeepSeek 或 ChatGPT，系統自動在背景監聽、擷取並即時同步 `gemini_cookies.json` 與 `deepseek_token.json`！瀏覽器擴充套件改為純可選（可有可無）。
+- **本地直連 Web 測試**：應用左側控制面板內建「對話測試」，點擊即可直接向 Gemini、ChatGPT、DeepSeek 等發送測試請求。
+- **專用 MCP 分析伺服器**：主力 Agent（如 Claude 3.7 / GPT-4o）可透過 MCP 呼叫 Gemini 的超長上下文進行多檔案審查、截圖排錯與聯網檢索。
 
 ---
 
@@ -19,21 +21,26 @@
 ### 1.1 環境需求
 - 系統：Windows
 - Python 虛擬環境：`C:\Users\Administrator\venv\Scripts\python.exe` (或 Python 3.10+)
+- 運行環境：[Bun](https://bun.sh/) 1.4+ (或直接執行封裝版 exe)
 
-### 1.2 取得 Gemini 登入 Cookie
-本專案支援免開瀏覽器背景直連，只需同步一次 Cookie：
-1. 開啟 Chrome 或 Edge，前往 `chrome://extensions`。
-2. 開啟右上角「開發人員模式」，點擊「載入未封裝項目」，選取本專案的 `extension/` 資料夾。
-3. 前往 [https://gemini.google.com](https://gemini.google.com) 並登入 Google 帳號。
-4. 點擊瀏覽器工具列上的 **WebChat2Local 擴充套件圖示**，點擊 **「抓取 Cookie 並存入本地」**。
-5. 本地會自動產生 `gemini_cookies.json`。
+### 1.2 登入與憑證獲取（本地直接登入，免裝外掛）
+1. 啟動 ModelDock 應用：
+   ```powershell
+   bun start
+   # 或雙擊 start_server.bat
+   ```
+2. 在 ModelDock 右側內嵌瀏覽器分頁分別切換：
+   - **Gemini**：登入 Google 帳號一次，ModelDock 自動在背景萃取 `__Secure-1PSID` 並儲存至 `gemini_cookies.json`。
+   - **DeepSeek**：登入 DeepSeek 帳號一次，自動萃取 `userToken` 並儲存至 `deepseek_token.json`。
+   - **ChatGPT**：登入一次或直接以訪客無痕模式使用。
+3. （可選）若您偏好使用外部日常 Chrome / Edge 瀏覽器，仍可在 `chrome://extensions` 載入 `extension/`，它會自動連上 `ws://127.0.0.1:8765/ws`，但**完全不是必須的**。
 
 ### 1.3 驗證環境
 在終端機執行自我診斷：
 ```powershell
 & "C:\Users\Administrator\venv\Scripts\python.exe" mcp_server.py --doctor
 ```
-看到 `[*] Cookie Configured: True` 即代表準備就緒！
+看到 `[*] Gemini Cookie Configured: True` 即代表準備就緒！
 
 ---
 
@@ -46,10 +53,10 @@
 ```json
 {
   "mcpServers": {
-    "gemini-analyzer": {
+    "modeldock-analyzer": {
       "command": "C:\\Users\\Administrator\\venv\\Scripts\\python.exe",
       "args": [
-        "C:\\Users\\Administrator\\Desktop\\html_test\\WebChat2Local\\mcp_server.py"
+        "C:\\Users\\Administrator\\Desktop\\html_test\\ModelDock\\mcp_server.py"
       ],
       "env": {
         "W2L_WORKSPACE": "${workspaceFolder}"
@@ -67,9 +74,9 @@
 
 ### 2.2 Kilo Code
 在 Kilo Code 的 MCP 設定面板中新增伺服器：
-- **Server Name**: `gemini-analyzer`
+- **Server Name**: `modeldock-analyzer`
 - **Command**: `C:\Users\Administrator\venv\Scripts\python.exe`
-- **Args**: `C:\Users\Administrator\Desktop\html_test\WebChat2Local\mcp_server.py`
+- **Args**: `C:\Users\Administrator\Desktop\html_test\ModelDock\mcp_server.py`
 - 或直接匯入 `mcp_configs/kilo_mcp_settings.json`。
 
 ### 2.3 Cursor IDE
@@ -77,10 +84,10 @@
 ```json
 {
   "mcpServers": {
-    "gemini-analyzer": {
+    "modeldock-analyzer": {
       "command": "C:\\Users\\Administrator\\venv\\Scripts\\python.exe",
       "args": [
-        "C:\\Users\\Administrator\\Desktop\\html_test\\WebChat2Local\\mcp_server.py"
+        "C:\\Users\\Administrator\\Desktop\\html_test\\ModelDock\\mcp_server.py"
       ],
       "env": {
         "W2L_WORKSPACE": "${workspaceFolder}"
@@ -95,13 +102,13 @@
 ```json
 {
   "mcpServers": {
-    "gemini-analyzer": {
+    "modeldock-analyzer": {
       "command": "C:\\Users\\Administrator\\venv\\Scripts\\python.exe",
       "args": [
-        "C:\\Users\\Administrator\\Desktop\\html_test\\WebChat2Local\\mcp_server.py"
+        "C:\\Users\\Administrator\\Desktop\\html_test\\ModelDock\\mcp_server.py"
       ],
       "env": {
-        "W2L_WORKSPACE": "C:\\Users\\Administrator\\Desktop\\html_test\\WebChat2Local"
+        "W2L_WORKSPACE": "C:\\Users\\Administrator\\Desktop\\html_test\\ModelDock"
       }
     }
   }
@@ -132,32 +139,44 @@
 ### 3.4 即時聯網搜尋 (`webchat_web_search`)
 - **使用時機**：查詢最新釋出的套件 API 規格、最新修補版本或官方文件。
 - **範例提問**：
-  > 「請調用 `webchat_web_search` 搜尋 MCP Python SDK 2.x 的 `MCPServer` 最新 tools 註冊語法與 breaking changes。」
+  > 「請調用 `webchat_web_search` 搜尋 MCP Python SDK 最新 tools 註冊語法。」
 
 ---
 
-## 🌐 4. 備用：OpenAI 相容 HTTP 網關 (若需當 Driver 使用)
+## 🌐 4. OpenAI 相容 HTTP 網關 (統一端口 8765)
 
-若依然希望將 Gemini Web 當作傳統 `/v1/chat/completions` API 伺服器：
-1. 啟動伺服器：
-   ```powershell
-   & "C:\Users\Administrator\venv\Scripts\python.exe" run_server.py start
-   ```
-2. 端點資訊：
-   - **Base URL**: `http://127.0.0.1:8765/v1`
-   - **API Key**: `sk-local`
-   - **Model**: `gemini-web/pro` 或 `gemini-web/flash`
-   - **儀表板**: `http://127.0.0.1:8765`
+ModelDock 啟動後，本機即可透過標準 HTTP 存取（端口統一為 **8765**，已徹底廢除 8787）：
+
+- **Base URL**: `http://127.0.0.1:8765/v1`
+- **Dashboard Web 儀表板**: `http://127.0.0.1:8765`
+- **可用模型**:
+  - `gemini-web/flash` (預設，直連極速)
+  - `gemini-web/pro` (長上下文 / 推理)
+  - `gemini-web/flash-thinking` (深度思考)
+  - `chatgpt-web/auto` (內嵌 ChatGPT 自動化)
+  - `deepseek-web/chat` (DeepSeek V3 直連)
+  - `deepseek-web/reasoner-search` (DeepSeek R1 直連)
+  - `webchat/auto` (全自動調度)
+
+### 快速測試範例：
+
+```powershell
+# 1. 最穩（純文字 /chat，無 JSON 引號轉義問題）：
+curl.exe -X POST http://127.0.0.1:8765/chat -H "Content-Type: text/plain" --data-binary "你好"
+
+# 2. OpenAI 相容端點：
+curl.exe -X POST http://127.0.0.1:8765/v1/chat/completions -H "Content-Type: application/json" --data "{\"model\":\"gemini-web/flash\",\"messages\":[{\"role\":\"user\",\"content\":\"你好\"}]}"
+```
 
 ---
 
 ## ❓ 5. 常見問題與排除 (FAQ)
 
 ### Q: 提示 `Cookie not found or invalid`？
-**解法**：重新開啟 Chrome / Edge，登入 [gemini.google.com](https://gemini.google.com)，透過擴充套件按鈕重新抓取 Cookie。
+**解法**：在 ModelDock 應用中點擊右側內嵌分頁「Gemini」，登入一次 Google 帳號，ModelDock 會在背景自動擷取並儲存到 `gemini_cookies.json`。
 
-### Q: Stdio MCP 沒有回應？
-**解法**：確認配置檔中的 Python 路徑是絕對路徑，且指向包含依賴套件之虛擬環境（`C:\Users\Administrator\venv\Scripts\python.exe`）。
+### Q: 擴充套件需要安裝嗎？
+**解法**：完全不需要。ModelDock 已內建獨立瀏覽器容器與自動憑證同步機制。擴充套件為可選項目，只有當你想把現有 Chrome 標籤頁當作橋接時才需要使用。
 
 ### Q: 如何執行全套自動化測試？
 ```powershell

@@ -3,10 +3,10 @@
     "gemini-analyzer": {
       "command": "C:\\Users\\Administrator\\venv\\Scripts\\python.exe",
       "args": [
-        "C:\\Users\\Administrator\\Desktop\\html_test\\WebChat2Local\\mcp_server.py"
+        "C:\\Users\\Administrator\\Desktop\\html_test\\ModelDock\\mcp_server.py"
       ],
       "env": {
-        "W2L_WORKSPACE": "C:\\Users\\Administrator\\Desktop\\html_test\\WebChat2Local"
+        "W2L_WORKSPACE": "C:\\Users\\Administrator\\Desktop\\html_test\\ModelDock"
       }
     }
   }

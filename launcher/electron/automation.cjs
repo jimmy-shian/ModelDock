@@ -1,4 +1,4 @@
-// 與 src/chatgpt.ts 同步的上游 selector（參考 miuuyy/codex-chatgpt-web）
+// ChatGPT DOM 自動化注入與結果監聽（支援 Lexical 編輯器與最新頁面結構）
 // 這裡只包「在頁面裡跑的 JS 字串」，給 main.cjs 的 executeJavaScript 用。
 const CHAT_URL = "https://chatgpt.com/?temporary-chat=true";
 

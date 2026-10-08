@@ -39,28 +39,49 @@ async def _execute_analysis(
         and "deepseek" not in model.lower()
     )
     if is_chatgpt_target:
-        if not hub.is_connected:
-            raise RuntimeError("ChatGPT 擴充套件尚未連線。請在 Chrome 或 Edge 開啟 https://chatgpt.com/。")
-        accumulated_text = ""
-        accumulated_thought = ""
-        async for event in hub.execute_turn(prompt=prompt, model=model, is_new_session=True):
-            if event.type == "error":
-                raise RuntimeError(event.error)
-            if event.text:
-                accumulated_text = event.text
-            elif event.delta:
-                accumulated_text += event.delta
-            if event.thought:
-                accumulated_thought = event.thought
-            elif event.thought_delta:
-                accumulated_thought += event.thought_delta
-        return {
-            "text": accumulated_text,
-            "thought": accumulated_thought,
-            "citations": [],
-            "model": "chatgpt-web",
-            "provider": "ChatGPT",
-        }
+        if hub.is_connected:
+            accumulated_text = ""
+            accumulated_thought = ""
+            async for event in hub.execute_turn(prompt=prompt, model=model, is_new_session=True):
+                if event.type == "error":
+                    raise RuntimeError(event.error)
+                if event.text:
+                    accumulated_text = event.text
+                elif event.delta:
+                    accumulated_text += event.delta
+                if event.thought:
+                    accumulated_thought = event.thought
+                elif event.thought_delta:
+                    accumulated_thought += event.thought_delta
+            return {
+                "text": accumulated_text,
+                "thought": accumulated_thought,
+                "citations": [],
+                "model": "chatgpt-web",
+                "provider": "ChatGPT (Extension)",
+            }
+        # 擴充套件未連線時，直接轉發至 ModelDock 本地桌面應用 (8765) 內嵌自動化
+        from server.bridge.transport import _electron_reachable, ELECTRON_BRIDGE_URL
+        if _electron_reachable():
+            import httpx
+            async with httpx.AsyncClient(timeout=180.0) as client:
+                res = await client.post(
+                    f"{ELECTRON_BRIDGE_URL}/v1/chat/completions",
+                    json={"model": model, "messages": [{"role": "user", "content": prompt}], "stream": False},
+                )
+                if res.status_code == 200:
+                    data = res.json()
+                    content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                    return {
+                        "text": content,
+                        "thought": "",
+                        "citations": [],
+                        "model": "chatgpt-web",
+                        "provider": "ChatGPT (ModelDock)",
+                    }
+                else:
+                    raise RuntimeError(f"ModelDock 應用回應失敗 (HTTP {res.status_code}): {res.text[:300]}")
+        raise RuntimeError("ChatGPT 擴充套件未連線且 ModelDock 應用未啟動 (8765)。請開啟 ModelDock 桌面應用或在瀏覽器開啟 https://chatgpt.com/。")
 
     # 2. DeepSeek direct engine (userToken + PoW, no browser tab needed)
     if _is_deepseek_target(model):

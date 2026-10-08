@@ -136,7 +136,7 @@ ModelDock 已安裝在本機的「C:\Users\Administrator\Desktop\html_test\Model
 
 ## 🧪 測試與驗證
 
-ModelDock 具備 102 項單元測試，完整覆蓋 MCP 協定、WASM PoW 解題、串流配接與沙箱安全：
+ModelDock 具備 104 項單元測試，完整覆蓋 MCP 協定、WASM PoW 解題、串流配接與沙箱安全：
 
 ```powershell
 & "C:\Users\Administrator\venv\Scripts\python.exe" -m pytest tests -q

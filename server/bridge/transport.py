@@ -33,14 +33,10 @@ from server.bridge.ws_hub import hub
 
 VALID_MODES = ("auto", "direct", "extension")
 
-# 合而為一：Python 8765 吃不到擴充套件時，轉發給 Electron 應用 (8787) 的
-# 內嵌 ChatGPT 自動化。反向（8787 -> 8765 直連）由 launcher/electron/main.cjs 負責。
-# 轉發方向嚴格單向，避免互轉迴圈：
-#   Python -> Electron：僅 ChatGPT 系 + 通用 webchat/auto 最後兜底
-#   Electron -> Python：僅 gemini-*/deepseek-*（main.cjs 內，不含 webchat）
+# 合而為一：支援與 ModelDock 桌面應用 (8765) 內嵌 ChatGPT 自動化無縫互通。
 ELECTRON_BRIDGE_URL = (
     os.getenv("MODELDOCK_ELECTRON_URL", "").strip()
-    or f"http://127.0.0.1:{os.getenv('MODELDOCK_ELECTRON_PORT', '8787').strip() or '8787'}"
+    or f"http://127.0.0.1:{os.getenv('MODELDOCK_ELECTRON_PORT', '8765').strip() or '8765'}"
 )
 
 # Electron 那側的模型名（gpt-web-port 系）一律視為 ChatGPT 請求，一併兜底。
@@ -133,14 +129,14 @@ def _is_chatgpt_model(model: Optional[str]) -> bool:
 
 
 def _electron_reachable(timeout: float = 0.5) -> bool:
-    """同步快探 Electron 應用 (8787) 是否在線。 refused 即視為不在，不拖慢 503。"""
+    """同步快探 Electron 應用 (8765) 是否在線。 refused 即視為不在，不拖慢 503。"""
     try:
         from urllib.parse import urlparse
         import socket as _socket
 
         u = urlparse(ELECTRON_BRIDGE_URL)
         host = u.hostname or "127.0.0.1"
-        port = u.port or 8787
+        port = u.port or 8765
         with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as sock:
             sock.settimeout(timeout)
             return sock.connect_ex((host, port)) == 0
@@ -327,8 +323,7 @@ def resolve_turn(
         single = next(iter(plats)) if is_generic and len(plats) == 1 else None
         return hub.execute_turn(prompt=prompt, model=model, is_new_session=is_new_session, platform=single), "extension"
 
-    # 合而為一最後兜底：通用模型無直連、無擴充套件時，轉 Electron 內嵌 ChatGPT。
-    #（gemini-/deepseek- 明確模型不進這裡，避免與 8787->8765 互轉迴圈。）
+    # 合而為一最後兜底：通用模型無直連、無擴充套件時，轉 ModelDock (8765) 內嵌 ChatGPT。
     if is_generic and _electron_reachable():
         return _electron_forward_turn(
             prompt, model, is_continuation=is_continuation,
@@ -337,5 +332,5 @@ def resolve_turn(
     raise TransportUnavailable(
         "瀏覽器擴充套件未連線 (請開啟 https://chatgpt.com 或 https://gemini.google.com)，"
         "且沒有可用的 Gemini cookie / DeepSeek Token 直連設定，"
-        "也偵測不到 ModelDock 應用 (8787) 的內嵌自動化。"
+        "也偵測不到 ModelDock 應用 (8765) 的內嵌自動化。"
     )

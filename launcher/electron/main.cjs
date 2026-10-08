@@ -1,12 +1,14 @@
-// gpt-web-port 桌面應用主程式（參考 miuuyy/codex-chatgpt-web 的 launcher 概念，最小化）。
-// - 內含瀏覽器（Electron persistent partition），免裝系統 Chrome、免 Python。
-// - 左邊控制面板，右邊內嵌 ChatGPT 登入頁（同一個 partition，登入態共用）。
-// - 自動化（丟資料/接回傳）直接驅動內嵌頁面，不開外部瀏覽器。
-// - 照樣開 HTTP（POST /chat、OpenAI 相容），舊腳本不用改。
+// ModelDock 桌面應用主程式（ChatGPT + Gemini + DeepSeek 全本機免外掛自動化）
+// - 統一 8765 連接埠：捨棄 8787，ModelDock 作為本機統一閘道（提供 OpenAI 相容、/chat、Web 儀表板）。
+// - 內含瀏覽器（Electron persistent partition），本地直接登入並自動背景更新 Cookie / Token。
+// - 內嵌自動驅動（ChatGPT）+ 背景直連引擎（Gemini/DeepSeek 經內部 Python Worker）。
+// - 擴充套件完全可有可無：無外掛亦可 100% 獨立運行。
 const { app, BrowserWindow, WebContentsView, ipcMain, session, nativeTheme, Tray, Menu, nativeImage } = require("electron");
 const http = require("node:http");
 const path = require("node:path");
 const fs = require("node:fs");
+const net = require("node:net");
+const { spawn, execSync } = require("node:child_process");
 const auto = require("./automation.cjs");
 
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
@@ -21,7 +23,8 @@ const PROVIDER_URLS = {
 let activeProvider = "chatgpt";
 
 const HOST = (process.env.HOST || "127.0.0.1").trim() || "127.0.0.1";
-const PORT = Number(process.env.PORT || 8787) || 8787;
+const PORT = Number(process.env.PORT || 8765) || 8765;
+const INTERNAL_PYTHON_PORT = Number(process.env.INTERNAL_PYTHON_PORT || 8766) || 8766;
 const API_KEY = (process.env.API_KEY || "").trim();
 const TURN_TIMEOUT_MS = Number(process.env.TURN_TIMEOUT_MS || 300000) || 300000;
 // 送出確認相關閾值：Enter 後等送出證據；送出後等開始產生；產生中指示燈亮卻零文字的最大容忍。
@@ -29,11 +32,77 @@ const SUBMIT_GRACE_MS = 8000;
 const ACCEPT_TIMEOUT_MS = 45000;
 const STALL_EMPTY_MS = 60000;
 
-// 合而為一：8787 收到直連系模型轉給 Python 8765（單向；webchat/gpt 留本地，
-// 避免與 8765 的通用兜底互轉迴圈）。8765 那側的反向（ChatGPT->Electron）
-// 由 server/bridge/transport.py 負責。
+// 內部 Python 直連 Worker 網址（預設 port 8766，避免與 ModelDock 外部 8765 衝突）
 const PYTHON_BRIDGE_URL = (process.env.PYTHON_BRIDGE_URL || "").trim()
-  || `http://127.0.0.1:${(process.env.W2L_PORT || "8765").trim() || "8765"}`;
+  || `http://127.0.0.1:${INTERNAL_PYTHON_PORT}`;
+
+let pythonProcess = null;
+
+function findPythonExe() {
+  const candidates = [
+    process.env.PYTHON_EXE,
+    "C:\\Users\\Administrator\\venv\\Scripts\\python.exe",
+    path.join(WORKSPACE_ROOT, "venv", "Scripts", "python.exe"),
+    path.join(WORKSPACE_ROOT, ".venv", "Scripts", "python.exe"),
+    "python",
+  ];
+  for (const c of candidates) {
+    if (c && fs.existsSync(c)) return c;
+  }
+  return "python";
+}
+
+async function isPythonBridgeAlive() {
+  try {
+    const r = await fetch(`${PYTHON_BRIDGE_URL}/v1/status`, { signal: AbortSignal.timeout(800) });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function ensurePythonWorker() {
+  if (await isPythonBridgeAlive()) {
+    console.log(`[modeldock] Python 直連 Worker 已在 ${PYTHON_BRIDGE_URL} 運行中。`);
+    return;
+  }
+  const pythonExe = findPythonExe();
+  const scriptPath = path.join(WORKSPACE_ROOT, "run_server.py");
+  if (!fs.existsSync(scriptPath)) {
+    console.log(`[modeldock] run_server.py 不存在於 ${scriptPath}，略過自動啟動 Python。`);
+    return;
+  }
+
+  console.log(`[modeldock] 正在後台啟動 Python Worker (port ${INTERNAL_PYTHON_PORT})... [${pythonExe}]`);
+  try {
+    pythonProcess = spawn(pythonExe, [scriptPath, "start", "--port", String(INTERNAL_PYTHON_PORT)], {
+      cwd: WORKSPACE_ROOT,
+      env: { ...process.env, W2L_PORT: String(INTERNAL_PYTHON_PORT) },
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    pythonProcess.on("exit", (code) => {
+      console.log(`[modeldock] Python Worker 進程結束 (code: ${code})`);
+      pythonProcess = null;
+    });
+  } catch (err) {
+    console.error("[modeldock] 啟動 Python Worker 失敗:", err);
+  }
+}
+
+function stopPythonWorker() {
+  if (pythonProcess) {
+    console.log("[modeldock] 正在關閉後台 Python Worker...");
+    try {
+      if (process.platform === "win32") {
+        try { execSync(`taskkill /pid ${pythonProcess.pid} /T /F`, { stdio: "ignore" }); } catch {}
+      } else {
+        pythonProcess.kill("SIGTERM");
+      }
+    } catch {}
+    pythonProcess = null;
+  }
+}
 
 function shouldForwardToPython(model) {
   const m = String(model || "").trim().toLowerCase();
@@ -101,18 +170,17 @@ function currentChatUrl() {
 }
 
 // ---------- 全自動本地憑證擷取（免擴充套件核心） ----------
-// 打包版 __dirname 在 resources/app 內，寫檔路徑跟 Python 8765 讀的源碼目錄
-// 會錯開，所以抓到後除了寫檔，還會直推一份給 8765（免重啟、免對路徑）。
+// 抓到憑證後除寫入本地工作區 JSON，亦同步直推內部 Python Worker（免重啟、免手動複製）。
 function pushToPythonBridge(apiPath, payload) {
-  // fire-and-forget：8765 沒開就跳過，不擋主流程。
+  // fire-and-forget：Python Worker 尚未就緒時不阻塞主流程。
   try {
-    fetch(`http://127.0.0.1:8765${apiPath}`, {
+    fetch(`${PYTHON_BRIDGE_URL}${apiPath}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(payload),
     }).then(async (r) => {
-      if (r.ok) console.log(`[modeldock] 已直推憑證到 8765 ${apiPath}`);
-      else console.log(`[modeldock] 直推 8765 ${apiPath} 失敗: HTTP ${r.status}`);
+      if (r.ok) console.log(`[modeldock] 已同步憑證到 Python Worker (${PYTHON_BRIDGE_URL}) ${apiPath}`);
+      else console.log(`[modeldock] 同步 Python Worker ${apiPath} 失敗: HTTP ${r.status}`);
     }).catch(() => {});
   } catch {}
 }
@@ -627,36 +695,106 @@ function startHttp() {
       res.writeHead(204, {
         "access-control-allow-origin": "*",
         "access-control-allow-methods": "GET, POST, OPTIONS",
-        "access-control-allow-headers": "content-type, authorization, x-api-key",
+        "access-control-allow-headers": "content-type, authorization, x-api-key, x-continue, x-model",
       });
       res.end();
       return;
     }
+
+    // 1) Web Dashboard 靜態資源（讓使用者也能直接用外部瀏覽器開啟 8765 儀表板）
+    if (req.method === "GET") {
+      if (u.pathname === "/" || u.pathname === "/index.html" || u.pathname === "/ui") {
+        const accept = req.headers["accept"] || "";
+        if (u.pathname === "/" && !accept.includes("text/html") && accept.includes("application/json")) {
+          return sendJson(res, {
+            service: "modeldock",
+            port: PORT,
+            endpoints: {
+              "POST /chat": "純文字 /chat，最穩無 JSON 引號問題",
+              "POST /v1/chat/completions": "OpenAI 相容端點",
+              "GET /v1/models": "模型列表",
+              "GET /health": "健康狀態",
+            },
+          });
+        }
+        const htmlPath = path.join(__dirname, "..", "renderer", "index.html");
+        try {
+          const content = fs.readFileSync(htmlPath, "utf-8");
+          res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+          res.end(content);
+          return;
+        } catch {}
+      }
+      if (u.pathname === "/styles.css") {
+        const cssPath = path.join(__dirname, "..", "renderer", "styles.css");
+        try {
+          const content = fs.readFileSync(cssPath, "utf-8");
+          res.writeHead(200, { "content-type": "text/css; charset=utf-8" });
+          res.end(content);
+          return;
+        } catch {}
+      }
+      if (u.pathname === "/renderer.js") {
+        const jsPath = path.join(__dirname, "..", "renderer", "renderer.js");
+        try {
+          const content = fs.readFileSync(jsPath, "utf-8");
+          res.writeHead(200, { "content-type": "application/javascript; charset=utf-8" });
+          res.end(content);
+          return;
+        } catch {}
+      }
+    }
+
     if (req.method === "GET" && u.pathname === "/ready") {
-      return sendJson(res, { ok: true, service: "gpt-web-port", app: "electron" });
+      return sendJson(res, { ok: true, service: "modeldock", app: "electron", port: PORT });
     }
     if (!authorized(req)) {
       return sendJson(res, { error: "unauthorized", message: "需要正確的 x-api-key。" }, 401);
     }
-    if (req.method === "GET" && u.pathname === "/health") {
+
+    // 2) 伺服器健康診斷
+    if (req.method === "GET" && (u.pathname === "/health" || u.pathname === "/v1/status")) {
       const s = await checkLogin();
+      let pythonStatus = null;
+      try {
+        const pr = await fetch(`${PYTHON_BRIDGE_URL}/v1/status`, { signal: AbortSignal.timeout(1500) });
+        if (pr.ok) pythonStatus = await pr.json();
+      } catch {}
+      const hasGemini = fs.existsSync(path.join(WORKSPACE_ROOT, "gemini_cookies.json"));
+      const hasDeepSeek = fs.existsSync(path.join(WORKSPACE_ROOT, "deepseek_token.json"));
       return sendJson(res, {
         ok: true,
+        port: PORT,
         browserStarted: Object.keys(chatViews).length > 0,
         loggedIn: s.loggedIn,
+        chatgpt: s.chatgpt,
+        gemini: hasGemini || (pythonStatus && pythonStatus.direct_configured),
+        gemini_direct: hasGemini || (pythonStatus && pythonStatus.direct_configured),
+        deepseek: hasDeepSeek || (pythonStatus && pythonStatus.deepseek_configured),
+        deepseek_direct: hasDeepSeek || (pythonStatus && pythonStatus.deepseek_configured),
         pageUrl: s.url,
         sessionAuth: s.sessionAuth || null,
         loginVisible,
         temporaryChat,
+        python_bridge: !!pythonStatus,
+        python_port: INTERNAL_PYTHON_PORT,
       });
     }
+
+    // 3) 模型列表（合併 ChatGPT 與內部 Python Gemini / DeepSeek 模型）
     if (req.method === "GET" && (u.pathname === "/v1/models" || u.pathname === "/models")) {
       const now = Math.floor(Date.now() / 1000);
       const local = [
+        { id: "gemini-web/flash", object: "model", created: now, owned_by: "gemini-web" },
+        { id: "gemini-web/pro", object: "model", created: now, owned_by: "gemini-web" },
+        { id: "gemini-web/flash-thinking", object: "model", created: now, owned_by: "gemini-web" },
+        { id: "chatgpt-web/auto", object: "model", created: now, owned_by: "chatgpt-web" },
+        { id: "deepseek-web/chat", object: "model", created: now, owned_by: "deepseek-web" },
+        { id: "deepseek-web/reasoner-search", object: "model", created: now, owned_by: "deepseek-web" },
         { id: "gpt-web-port", object: "model", created: now, owned_by: "chatgpt-web" },
         { id: "chatgpt-web", object: "model", created: now, owned_by: "chatgpt-web" },
+        { id: "webchat/auto", object: "model", created: now, owned_by: "modeldock" },
       ];
-      // 合而為一：把 8765 的直連模型併進來，8787 一個口全吃。8765 沒開就只回本地。
       try {
         const r = await fetch(`${PYTHON_BRIDGE_URL}/v1/models`, { signal: AbortSignal.timeout(2000) });
         if (r.ok) {
@@ -675,6 +813,8 @@ function startHttp() {
         data: local,
       });
     }
+
+    // 4) OpenAI 相容聊天端點
     if (req.method === "POST" && (u.pathname === "/v1/chat/completions" || u.pathname === "/v1/completions" || u.pathname === "/chat/completions")) {
       let body;
       try {
@@ -682,11 +822,20 @@ function startHttp() {
       } catch {
         return sendJson(res, { error: { message: "JSON 格式錯誤。", type: "invalid_request_error" } }, 400);
       }
-      const model = (body && body.model) || "gpt-web-port";
-      // 合而為一：直連系轉 Python 8765；其餘（gpt/chatgpt/webchat/空）走本地內嵌。
+      const model = (body && body.model) || "webchat/auto";
+      // 直連系轉給內部 Python Worker
       if (shouldForwardToPython(model)) {
         return forwardToPythonBridge(req, res, body);
       }
+      if (model === "webchat/auto" || model === "auto") {
+        const hasGemini = fs.existsSync(path.join(WORKSPACE_ROOT, "gemini_cookies.json"));
+        const hasDeepSeek = fs.existsSync(path.join(WORKSPACE_ROOT, "deepseek_token.json"));
+        if (hasGemini || hasDeepSeek) {
+          return forwardToPythonBridge(req, res, body);
+        }
+      }
+
+      // ChatGPT 系走 Electron 本地內嵌自動化
       const stream = body.stream === true;
       const cont = body.continue === true || body.continueConversation === true;
       let prompt = "";
@@ -731,9 +880,12 @@ function startHttp() {
         return sendJson(res, { error: { message: msg, type: "server_error" } }, 502);
       }
     }
+
+    // 5) 純文字與簡易 POST /chat 對話測試（無引號問題，支援所有模型）
     if (req.method === "POST" && (u.pathname === "/chat" || u.pathname === "/")) {
       let prompt = "";
       let cont = false;
+      let model = "";
       const ct = req.headers["content-type"] || "";
       const raw = await readBody(req);
       if (ct.includes("application/json")) {
@@ -743,6 +895,7 @@ function startHttp() {
           else {
             prompt = b.prompt || b.message || b.input || b.text || b.q || "";
             cont = b.continue === true || b.continueConversation === true;
+            model = b.model || "";
           }
         } catch {
           return sendJson(res, { error: "bad_request", message: "JSON 格式錯誤。" }, 400);
@@ -750,23 +903,115 @@ function startHttp() {
       } else {
         prompt = raw;
         cont = req.headers["x-continue"] === "1";
+        model = req.headers["x-model"] || "";
       }
       if (!String(prompt).trim()) return sendJson(res, { error: "bad_request", message: "缺少 prompt。" }, 400);
+
+      const targetModel = model || (activeProvider === "gemini" ? "gemini-web/flash" : (activeProvider === "deepseek" ? "deepseek-web/chat" : "chatgpt-web/auto"));
+      if (shouldForwardToPython(targetModel)) {
+        return forwardToPythonBridge(req, res, {
+          model: targetModel,
+          messages: [{ role: "user", content: String(prompt) }],
+          stream: false,
+        });
+      }
+
       const ctrl = new AbortController();
       req.on("close", () => ctrl.abort());
       try {
         const r = await ask(String(prompt), { continueConversation: cont, signal: ctrl.signal });
-        return sendJson(res, { reply: r.reply, conversationUrl: r.conversationUrl, durationMs: r.durationMs });
+        if (!ct.includes("application/json") && req.headers["accept"]?.includes("text/plain")) {
+          res.writeHead(200, { "content-type": "text/plain; charset=utf-8", "access-control-allow-origin": "*" });
+          res.end(r.reply);
+          return;
+        }
+        return sendJson(res, { reply: r.reply, model: targetModel, conversationUrl: r.conversationUrl, durationMs: r.durationMs });
       } catch (e) {
         const msg = (e && e.message) || String(e);
         if (e && e.code === "not_logged_in") return sendJson(res, { error: "not_logged_in", message: msg }, 401);
         return sendJson(res, { error: "chatgpt_error", message: msg }, 502);
       }
     }
+
+    // 6) 憑證熱同步端點（擴充套件或外部工具推送）
+    if (req.method === "POST" && u.pathname === "/v1/cookies") {
+      let b;
+      try { b = JSON.parse(await readBody(req)); } catch { return sendJson(res, { error: "bad json" }, 400); }
+      const targetFile = path.join(WORKSPACE_ROOT, "gemini_cookies.json");
+      try { fs.writeFileSync(targetFile, JSON.stringify(b, null, 2), "utf-8"); } catch {}
+      pushToPythonBridge("/v1/cookies", b);
+      return sendJson(res, { ok: true, synced: true });
+    }
+
+    if (req.method === "POST" && u.pathname === "/v1/deepseek/token") {
+      let b;
+      try { b = JSON.parse(await readBody(req)); } catch { return sendJson(res, { error: "bad json" }, 400); }
+      const targetFile = path.join(WORKSPACE_ROOT, "deepseek_token.json");
+      try { fs.writeFileSync(targetFile, JSON.stringify(b, null, 2), "utf-8"); } catch {}
+      pushToPythonBridge("/v1/deepseek/token", b);
+      return sendJson(res, { ok: true, synced: true });
+    }
+
+    // 7) Antigravity / Codex responses 相容轉發
+    if (req.method === "POST" && u.pathname === "/v1/responses") {
+      let b;
+      try { b = JSON.parse(await readBody(req)); } catch { return sendJson(res, { error: "bad json" }, 400); }
+      const ctrl = new AbortController();
+      req.on("close", () => ctrl.abort());
+      try {
+        const r = await fetch(`${PYTHON_BRIDGE_URL}/v1/responses`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(b),
+          signal: ctrl.signal,
+        });
+        const ct = r.headers.get("content-type") || "application/json";
+        if (ct.includes("text/event-stream")) {
+          res.writeHead(r.status, { "content-type": ct, "cache-control": "no-cache", connection: "keep-alive", "access-control-allow-origin": "*" });
+          const reader = r.body.getReader();
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            res.write(Buffer.from(value));
+          }
+          res.end();
+          return;
+        }
+        const text = await r.text();
+        res.writeHead(r.status, { "content-type": ct, "access-control-allow-origin": "*" });
+        res.end(text);
+        return;
+      } catch (e) {
+        return sendJson(res, { error: String(e) }, 502);
+      }
+    }
+
     return sendJson(res, { error: "not_found", message: `沒有這個路徑：${req.method} ${u.pathname}` }, 404);
   });
+
+  // 8) WebSocket 升級代理（若使用者有裝 Chrome 擴充套件連線 ws://127.0.0.1:8765/ws，無縫轉接內部 Python）
+  server.on("upgrade", (req, socket, head) => {
+    const u = new URL(req.url || "/", "http://x");
+    if (u.pathname === "/ws") {
+      const targetSocket = net.connect(INTERNAL_PYTHON_PORT, HOST, () => {
+        targetSocket.write(`${req.method} ${req.url} HTTP/${req.httpVersion}\r\n`);
+        for (let i = 0; i < req.rawHeaders.length; i += 2) {
+          targetSocket.write(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}\r\n`);
+        }
+        targetSocket.write("\r\n");
+        if (head && head.length > 0) targetSocket.write(head);
+        socket.pipe(targetSocket);
+        targetSocket.pipe(socket);
+      });
+      targetSocket.on("error", () => socket.destroy());
+      socket.on("error", () => targetSocket.destroy());
+    } else {
+      socket.destroy();
+    }
+  });
+
   server.listen(PORT, HOST, () => {
-    console.log(`[modeldock] http://${HOST}:${PORT}（Electron 內含瀏覽器，免 Chrome/Python）`);
+    console.log(`[modeldock] 統一閘道已啟動於 http://${HOST}:${PORT}（OpenAI 相容 + Web 儀表板 + 免外掛登入）`);
   });
   return server;
 }
@@ -791,21 +1036,8 @@ async function createWindow() {
     webPreferences: { preload: path.join(__dirname, "preload.cjs") },
   });
   mainWin.contentView.addChildView(panelView);
-  await panelView.webContents.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
 
-  // ChatGPT 常駐 view 先建（問答通道）；Gemini/DeepSeek 背景常駐預建，
-  // 縮到托盤、停在別的分頁時也能自動同步 Cookie/Token。
-  chatView = ensureProviderView("chatgpt");
-  chatViews.chatgpt = chatView;
-  await chatView.webContents.loadURL(currentChatUrl());
-  // 背景暖機：不影響右側顯示，失敗也不擋主視窗。
-  try { ensureBackgroundProviderView("gemini"); } catch {}
-  try { ensureBackgroundProviderView("deepseek"); } catch {}
-
-  layoutViews();
-  mainWin.on("resize", layoutViews);
-
-  // 單一切換按鈕：顯示 / 隱藏登入頁（同一個按鈕切換，不再要兩個）
+  // 立即註冊所有 IPC 處理器，確保前端渲染載入時能即刻調用
   ipcMain.handle("show-panel", async () => {
     loginVisible = false;
     layoutViews();
@@ -821,24 +1053,19 @@ async function createWindow() {
     layoutViews();
     return { ok: true, loginVisible };
   });
-  // 對話紀錄模式：無痕 temporary vs 一般保留紀錄（記住為預設，下次問答/開新對話生效）
-  // GPT：登入後仍預設走 temporary-chat 無痕（不留紀錄）；切一般才保留。
-  // Gemini：官方無免登入（一定要 Google 登入）；DeepSeek：一定要登入取 userToken。
   ipcMain.handle("set-temporary-chat", async (_e, temporary) => {
     temporaryChat = temporary !== false;
     return { ok: true, temporaryChat };
   });
   ipcMain.handle("login-status", checkLogin);
-  // 路徑自動抓取：MCP 一句話設定用。每個人安裝位置不同，前端不再寫死絕對路徑。
   ipcMain.handle("get-paths", async () => {
     const serverScript = path.join(WORKSPACE_ROOT, "mcp_server.py");
     return {
       workspaceRoot: WORKSPACE_ROOT,
       serverScript,
-      pythonExe: process.execPath || "python",
+      pythonExe: findPythonExe(),
     };
   });
-  // 左側面板主題切換時，同步內嵌頁的 prefers-color-scheme
   ipcMain.handle("set-theme", async (_e, t) => {
     nativeTheme.themeSource = t === "light" ? "light" : "dark";
     return { ok: true };
@@ -853,7 +1080,6 @@ async function createWindow() {
     if (gptView) await gptView.webContents.loadURL(currentChatUrl());
     return { ok: true };
   });
-  // 內嵌頁卡住/改版導致找不到輸入框時：強制重載當前頁（保留登入態，同 partition）
   ipcMain.handle("reload-browser-tab", async () => {
     const view = activeChatView();
     if (!view) return { ok: false, error: "no view" };
@@ -864,7 +1090,6 @@ async function createWindow() {
       return { ok: false, error: String((e && e.message) || e) };
     }
   });
-  // 診斷：回報 composer 探測明細（哪個 selector 命中、可見框數）
   ipcMain.handle("debug-composer", async () => {
     const gptView = chatViews.chatgpt || activeChatView();
     if (!gptView) return { ok: false, error: "no view" };
@@ -875,8 +1100,6 @@ async function createWindow() {
       return { ok: false, error: String((e && e.message) || e) };
     }
   });
-
-  // 多模型切換：常駐 view，命中已載入頁就不重載（解決 3 頁切換卡頓）。
   ipcMain.handle("switch-browser-tab", async (_e, provider) => {
     if (PROVIDER_URLS[provider]) {
       activeProvider = provider;
@@ -885,7 +1108,6 @@ async function createWindow() {
       try {
         const targetUrl = PROVIDER_URLS[provider]();
         const cur = view.webContents.getURL() || "";
-        // 同域就不重載：例如已在 gemini.google.com 就直接顯示，秒切。
         const sameSite = (provider === "chatgpt" && /^https:\/\/chatgpt\.com\//.test(cur))
           || (provider === "gemini" && /^https:\/\/gemini\.google\.com\//.test(cur))
           || (provider === "deepseek" && /^https:\/\/chat\.deepseek\.com\//.test(cur));
@@ -904,6 +1126,8 @@ async function createWindow() {
     return harvestDeepSeekToken();
   });
 
+  await panelView.webContents.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
+
   // 頁面載入完成時與背景定時器自動擷取憑證（Gemini 走 session cookie，不依賴特定 view）
   setInterval(harvestAllCredentials, 25000);
 
@@ -916,7 +1140,7 @@ async function createWindow() {
       hideNotified = true;
       tray.displayBalloon({
         title: "ModelDock 還在跑",
-        content: "已收到右下角托盤，HTTP 照常服務；要完全結束請按托盤「結束」。",
+        content: "已收到右下角托盤，HTTP 8765 照常服務；要完全結束請按托盤「結束」。",
       });
     }
   });
@@ -929,6 +1153,11 @@ async function createWindow() {
 
 app.on("before-quit", () => {
   quitting = true;
+  stopPythonWorker();
+});
+
+process.on("exit", () => {
+  stopPythonWorker();
 });
 
 app.on("second-instance", () => {
@@ -936,6 +1165,7 @@ app.on("second-instance", () => {
 });
 
 app.whenReady().then(async () => {
+  await ensurePythonWorker();
   await createWindow();
   startHttp();
   app.on("activate", async () => {
