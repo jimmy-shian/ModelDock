@@ -33,6 +33,21 @@ if not exist "launcher\electron\main.cjs" (
   pause
   exit /b 1
 )
+if not exist "run_server.py" (
+  echo [ERROR] run_server.py not found. Python backend incomplete.
+  pause
+  exit /b 1
+)
+if not exist "server\" (
+  echo [ERROR] server directory not found. Python backend incomplete.
+  pause
+  exit /b 1
+)
+if not exist "mcp_server.py" (
+  echo [ERROR] mcp_server.py not found. MCP backend incomplete.
+  pause
+  exit /b 1
+)
 echo     Env OK.
 
 REM ---- [1/5] clean ----

@@ -24,6 +24,48 @@
     "asar": true,
     "directories": { "output": "release" },
     "files": ["electron/**", "renderer/**", "build/**", "package.json"],
+    "extraFiles": [
+      {
+        "from": "../server",
+        "to": "server",
+        "filter": [
+          "**/*",
+          "!**/__pycache__/**",
+          "!**/*.pyc"
+        ]
+      },
+      {
+        "from": "../run_server.py",
+        "to": "run_server.py"
+      },
+      {
+        "from": "../mcp_server.py",
+        "to": "mcp_server.py"
+      },
+      {
+        "from": "../desktop_app.py",
+        "to": "desktop_app.py"
+      },
+      {
+        "from": "../setup_antigravity.py",
+        "to": "setup_antigravity.py"
+      },
+      {
+        "from": "../gemini_cookies.example.json",
+        "to": "gemini_cookies.example.json"
+      },
+      {
+        "from": "../deepseek_token.example.json",
+        "to": "deepseek_token.example.json"
+      },
+      {
+        "from": "../mcp_configs",
+        "to": "mcp_configs",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
     "icon": "build/icon",
     "win": {
       "target": ["nsis"],

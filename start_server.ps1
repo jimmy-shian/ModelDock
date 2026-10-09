@@ -13,9 +13,17 @@ if (Get-Command bun -ErrorAction SilentlyContinue) {
     exit $LASTEXITCODE
 }
 
-if (Test-Path "$PSScriptRoot\ModelDock-0.1.1-win-x64.exe") {
-    Write-Host "[ModelDock] Launching packaged ModelDock application..." -ForegroundColor Green
-    Start-Process "$PSScriptRoot\ModelDock-0.1.1-win-x64.exe"
+$installedApp = "$env:LOCALAPPDATA\Programs\ModelDock\ModelDock.exe"
+if (Test-Path $installedApp) {
+    Write-Host "[ModelDock] Launching installed ModelDock application..." -ForegroundColor Green
+    Start-Process $installedApp
+    exit 0
+}
+
+$packagedExe = Get-ChildItem -Path "$PSScriptRoot\ModelDock-*-win-x64.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($packagedExe) {
+    Write-Host "[ModelDock] Launching installer $($packagedExe.Name)..." -ForegroundColor Green
+    Start-Process $packagedExe.FullName
     exit 0
 }
 

@@ -10,9 +10,15 @@ if not errorlevel 1 (
     exit /b %errorlevel%
 )
 
-if exist "ModelDock-0.1.1-win-x64.exe" (
-    echo [ModelDock] 啟動已封裝之 ModelDock-0.1.1-win-x64.exe...
-    start "" "%~dp0ModelDock-0.1.1-win-x64.exe"
+if exist "%LOCALAPPDATA%\Programs\ModelDock\ModelDock.exe" (
+    echo [ModelDock] 啟動已安裝之 ModelDock 桌面應用...
+    start "" "%LOCALAPPDATA%\Programs\ModelDock\ModelDock.exe"
+    exit /b 0
+)
+
+for %%f in ("ModelDock-*-win-x64.exe") do (
+    echo [ModelDock] 啟動已封裝之安裝程式 %%~nxf...
+    start "" "%~dp0%%~nxf"
     exit /b 0
 )
 

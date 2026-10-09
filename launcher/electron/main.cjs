@@ -11,7 +11,21 @@ const net = require("node:net");
 const { spawn, execSync } = require("node:child_process");
 const auto = require("./automation.cjs");
 
-const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
+function getWorkspaceRoot() {
+  if (!app.isPackaged) {
+    return path.resolve(__dirname, "..", "..");
+  }
+  const execDir = path.dirname(process.execPath);
+  if (fs.existsSync(path.join(execDir, "run_server.py"))) {
+    return execDir;
+  }
+  if (process.resourcesPath && fs.existsSync(path.join(process.resourcesPath, "run_server.py"))) {
+    return process.resourcesPath;
+  }
+  return execDir;
+}
+
+const WORKSPACE_ROOT = getWorkspaceRoot();
 const PARTITION = "persist:gpt-web-port";
 const PANEL_WIDTH = 420;
 
@@ -44,10 +58,16 @@ function findPythonExe() {
     "C:\\Users\\Administrator\\venv\\Scripts\\python.exe",
     path.join(WORKSPACE_ROOT, "venv", "Scripts", "python.exe"),
     path.join(WORKSPACE_ROOT, ".venv", "Scripts", "python.exe"),
-    "python",
   ];
   for (const c of candidates) {
     if (c && fs.existsSync(c)) return c;
+  }
+  if (process.platform === "win32") {
+    try {
+      const out = execSync("where python", { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
+      const firstLine = out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)[0];
+      if (firstLine && fs.existsSync(firstLine)) return firstLine;
+    } catch {}
   }
   return "python";
 }
@@ -77,7 +97,7 @@ async function ensurePythonWorker() {
   try {
     pythonProcess = spawn(pythonExe, [scriptPath, "start", "--port", String(INTERNAL_PYTHON_PORT)], {
       cwd: WORKSPACE_ROOT,
-      env: { ...process.env, W2L_PORT: String(INTERNAL_PYTHON_PORT) },
+      env: { ...process.env, W2L_PORT: String(INTERNAL_PYTHON_PORT), W2L_WORKSPACE: WORKSPACE_ROOT },
       stdio: "ignore",
       windowsHide: true,
     });
@@ -85,6 +105,14 @@ async function ensurePythonWorker() {
       console.log(`[modeldock] Python Worker 進程結束 (code: ${code})`);
       pythonProcess = null;
     });
+
+    for (let i = 0; i < 15; i++) {
+      await new Promise((r) => setTimeout(r, 200));
+      if (await isPythonBridgeAlive()) {
+        console.log(`[modeldock] Python Worker 啟動成功並已就緒 (port ${INTERNAL_PYTHON_PORT})。`);
+        break;
+      }
+    }
   } catch (err) {
     console.error("[modeldock] 啟動 Python Worker 失敗:", err);
   }
@@ -110,6 +138,9 @@ function shouldForwardToPython(model) {
 }
 
 async function forwardToPythonBridge(req, res, body) {
+  if (!await isPythonBridgeAlive()) {
+    await ensurePythonWorker();
+  }
   const ctrl = new AbortController();
   req.on("close", () => ctrl.abort());
   try {
@@ -146,7 +177,7 @@ async function forwardToPythonBridge(req, res, body) {
     });
     res.end(text);
   } catch (e) {
-    return sendJson(res, { error: { message: `Python 直連橋（${PYTHON_BRIDGE_URL}）連線失敗：${(e && e.message) || e}。請確認 8765 有啟動且 Token/Cookie 已設定。`, type: "server_error" } }, 502);
+    return sendJson(res, { error: { message: `Python 直連橋（${PYTHON_BRIDGE_URL}）連線失敗：${(e && e.message) || e}。請確認內部 Python Worker（port ${INTERNAL_PYTHON_PORT}）已啟動且 Token/Cookie 已設定。`, type: "server_error" } }, 502);
   }
 }
 
@@ -360,9 +391,8 @@ function activeChatView() {
 
 function layoutViews() {
   if (!mainWin || !panelView) return;
-  const active = activeChatView();
-  if (!active) return;
   const { width, height } = mainWin.getContentBounds();
+  if (width <= 0 || height <= 0) return;
   if (loginVisible) {
     const pw = Math.min(PANEL_WIDTH, width);
     panelView.setBounds({ x: 0, y: 0, width: pw, height });
@@ -1127,6 +1157,21 @@ async function createWindow() {
   });
 
   await panelView.webContents.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
+
+  // ChatGPT 常駐 view 先建（問答通道）；Gemini/DeepSeek 延遲按需建立，切換後常駐。
+  chatView = ensureProviderView("chatgpt");
+  chatViews.chatgpt = chatView;
+  chatView.webContents.loadURL(currentChatUrl()).catch(() => {});
+
+  layoutViews();
+  mainWin.on("resize", layoutViews);
+  mainWin.on("maximize", layoutViews);
+  mainWin.on("unmaximize", layoutViews);
+  mainWin.on("restore", layoutViews);
+
+  // 背景暖機：不影響右側顯示，失敗也不擋主視窗
+  try { ensureBackgroundProviderView("gemini"); } catch {}
+  try { ensureBackgroundProviderView("deepseek"); } catch {}
 
   // 頁面載入完成時與背景定時器自動擷取憑證（Gemini 走 session cookie，不依賴特定 view）
   setInterval(harvestAllCredentials, 25000);
