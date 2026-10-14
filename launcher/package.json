@@ -1,6 +1,6 @@
 {
   "name": "modeldock",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "ModelDock 桌面應用（Electron，內含瀏覽器，多模型統一管理）",
   "type": "commonjs",

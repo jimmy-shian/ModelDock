@@ -1,6 +1,6 @@
 {
   "name": "modeldock",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "ModelDock：Multi-model AI 桌面工作站 — ChatGPT + Gemini + DeepSeek 全本機自動化",
   "type": "module",

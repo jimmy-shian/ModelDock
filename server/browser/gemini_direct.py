@@ -197,13 +197,38 @@ class DirectGeminiEngine:
 
 
     def _resolve_model_name(self, client: GeminiClient, requested_model: str) -> Optional[str]:
-        # Single-model build: everything resolves to gemini-flash.
-        # If client status is not AVAILABLE (e.g. UNAUTHENTICATED or limited tier),
-        # passing model string causes gemini_webapi to reject with GeminiError.
-        # Passing None allows Google to use the account's default model safely!
-        if getattr(client, "account_status", None) != AccountStatus.AVAILABLE:
-            return None
-        return "gemini-flash"
+        # Google renames web models server-side without notice
+        # (e.g. "gemini-flash" -> "gemini-自動"). Any hardcoded id goes stale
+        # and gemini_webapi raises ValueError("Unknown model name...").
+        # Strategy: try to resolve the requested name against the live per-account
+        # registry; on any failure return None so Google uses the account default
+        # instead of sending a dead model header. Never raise here.
+        try:
+            if requested_model and hasattr(client, "resolve_model"):
+                try:
+                    resolved = client.resolve_model(requested_model)
+                    name = getattr(resolved, "model_name", None)
+                    if name:
+                        return name
+                except Exception:
+                    pass
+            # Fallback: first available model from the live registry.
+            try:
+                models = client.list_models() if hasattr(client, "list_models") else None
+                if models:
+                    for m in models:
+                        if getattr(m, "is_available", True):
+                            mname = getattr(m, "model_name", None)
+                            if mname:
+                                return mname
+                    first = getattr(models[0], "model_name", None)
+                    if first:
+                        return first
+            except Exception:
+                pass
+        except Exception:
+            pass
+        return None
 
     def _cleanup_stale_sessions(self, max_idle_sec: float = 7200):
         now = time.time()

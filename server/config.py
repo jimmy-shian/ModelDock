@@ -18,7 +18,7 @@ from server.model_catalog import (
 SERVER_HOST = os.getenv("W2L_HOST", "127.0.0.1")
 SERVER_PORT = int(os.getenv("W2L_PORT", "8765"))
 BASE_URL = f"http://{SERVER_HOST}:{SERVER_PORT}"
-VERSION = "2.5.0"
+VERSION = "2.5.1"
 
 # Security & Workspace
 def get_workspace_root() -> Path:
