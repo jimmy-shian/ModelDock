@@ -1,0 +1,69 @@
+name: Release exe
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Verify tag version
+        run: |
+          VERSION="${TAG#v}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Tag must be v<semver>, e.g. v0.1.3 (got: '$TAG')"
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Sync version into package.json
+        run: |
+          node -e 'const fs=require("fs");for(const f of ["package.json","launcher/package.json"]){const j=JSON.parse(fs.readFileSync(f,"utf8"));j.version=process.env.VERSION;fs.writeFileSync(f,JSON.stringify(j,null,2)+"\n");}'
+
+      - name: Install dependencies
+        run: |
+          bun install
+          bun install --cwd launcher
+
+      - name: Typecheck
+        run: bun run --cwd launcher typecheck || echo "::warning::typecheck failed (non-blocking)"
+
+      - name: Package Windows installer (electron-builder)
+        run: bun run --cwd launcher package:win
+
+      - name: Create GitHub Release and attach exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd launcher/release
+          rm -f *.blockmap *.yml builder-debug.yml
+          shopt -s nullglob
+          exes=(ModelDock-*.exe)
+          if [ ${#exes[@]} -eq 0 ]; then
+            echo "::error::No ModelDock-*.exe found in launcher/release"
+            ls -la
+            exit 1
+          fi
+          exe="${exes[0]}"
+          sha256sum "$exe" > "$exe.sha256"
+          gh release create "$TAG" \
+            --title "ModelDock $TAG" \
+            --generate-notes \
+            --latest \
+            "$exe" "$exe.sha256"

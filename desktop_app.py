@@ -33,7 +33,23 @@ from server.antigravity.installer import install_antigravity_integration
 
 
 def create_tray_icon_image():
-    """Generates an in-memory 64x64 blue Gemini 'G' icon with 0 disk write."""
+    """Loads the official ModelDock icon (64x64) if available; falls back to a drawn placeholder."""
+    here = Path(__file__).resolve().parent
+    candidates = [
+        here / "launcher" / "build" / "icon.png",
+        here / "icon.png",
+        here.parent / "app.asar" / "build" / "icon.png",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            try:
+                img = Image.open(candidate).convert("RGBA").resize((64, 64), Image.LANCZOS)
+                mask = Image.new("L", (64, 64), 0)
+                ImageDraw.Draw(mask).rounded_rectangle((0, 0, 63, 63), radius=14, fill=255)
+                img.putalpha(mask)
+                return img
+            except Exception:
+                pass  # fall through to placeholder
     image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
     

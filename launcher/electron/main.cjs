@@ -186,6 +186,12 @@ nativeTheme.themeSource = "dark";
 // Windows 工作列分組：沒有 AppUserModelId 會跟 Electron 預設混在一起、圖示錯亂。
 try { if (process.platform === "win32") app.setAppUserModelId("dev.modeldock.app"); } catch {}
 
+// Google 登入頁偵測到 User-Agent 含「Electron/」就判定為「不支援 JavaScript 的瀏覽器」（出現「目前無法登入帳戶」頁）。
+// 這裡統一移除該標記，讓內嵌 Gemini / DeepSeek 登入可正常運作（ChatGPT 不受影響）。
+function stripElectronUA(ua) {
+  return String(ua || "").replace(/\s*Electron\/[\d.]+/g, "");
+}
+
 let mainWin = null;
 let panelView = null;
 // 三供應商各一個常駐 WebContentsView：切換只做 show/hide，不再每次 loadURL（解決切換卡頓）。
@@ -1061,6 +1067,14 @@ async function createWindow() {
 
   // 確保同一個持久 partition（登入態跟上游一樣留在應用裡）
   session.fromPartition(PARTITION, { cache: true });
+  // 在任何內嵌頁載入前修好 UA（partition + 全域 fallback 都清掉 Electron 標記）
+  try {
+    const ses = session.fromPartition(PARTITION, { cache: true });
+    ses.setUserAgent(stripElectronUA(ses.getUserAgent()));
+  } catch {}
+  try {
+    app.userAgentFallback = stripElectronUA(app.userAgentFallback);
+  } catch {}
 
   panelView = new WebContentsView({
     webPreferences: { preload: path.join(__dirname, "preload.cjs") },
@@ -1205,7 +1219,13 @@ process.on("exit", () => {
   stopPythonWorker();
 });
 
-app.on("second-instance", () => {
+app.on("second-instance", (_e, argv) => {
+  // 安裝/解除安裝前，NSIS 會用 --modeldock-quit 叫本程式自己優雅退出（收掉 Python Worker）。
+  if (Array.isArray(argv) && argv.some((a) => a === "--modeldock-quit")) {
+    quitting = true;
+    app.quit();
+    return;
+  }
   showMainWindow();
 });
 
