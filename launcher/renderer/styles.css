@@ -451,14 +451,20 @@ textarea { resize: vertical; min-height: 72px; }
 }
 .event-item {
   display: flex;
-  gap: 10px;
+  flex-direction: column;
+  gap: 4px;
   padding: 7px 12px;
   border-bottom: 1px solid var(--border);
   font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
-  align-items: baseline;
+  align-items: stretch;
 }
 .event-item:last-child { border-bottom: none; }
+.ev-head {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
 .event-empty {
   padding: 16px;
   text-align: center;
@@ -470,7 +476,57 @@ textarea { resize: vertical; min-height: 72px; }
 .ev-level.info { color: var(--accent); }
 .ev-level.warn { color: var(--warning); }
 .ev-level.error { color: var(--danger); }
+.ev-level.debug { color: var(--text-muted); }
+.ev-src {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.ev-origin {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
 .ev-msg { flex: 1; word-break: break-word; color: var(--text-secondary); }
+.ev-details {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: 2px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+.ev-det { display: flex; gap: 6px; align-items: baseline; }
+.ev-det-k { flex-shrink: 0; color: var(--accent); }
+.ev-det-v { flex: 1 1 auto; word-break: break-word; color: var(--text-secondary); }
+
+/* === Doctor === */
+.check-row {
+  display: flex;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+  align-items: baseline;
+}
+.check-row:last-child { border-bottom: none; }
+.check-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  align-self: center;
+}
+.check-dot.ok { background: var(--success); }
+.check-dot.warning { background: var(--warning); }
+.check-dot.error { background: var(--danger); }
+.check-body { flex: 1; min-width: 0; }
+.check-body b { font-weight: 600; color: var(--text-primary); font-size: 13px; }
+.check-detail { color: var(--text-muted); font-size: 12px; margin-top: 2px; word-break: break-word; }
 
 /* === Modal (OpenDesign Vertical Unfold) === */
 .modal-overlay {

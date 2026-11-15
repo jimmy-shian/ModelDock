@@ -53,6 +53,141 @@ const PYTHON_BRIDGE_URL = (process.env.PYTHON_BRIDGE_URL || "").trim()
 
 let pythonProcess = null;
 
+// ---------- 最近事件（記憶體環狀緩衝；面板 /v1/logs 與 IPC 共用） ----------
+// 記錄「被呼叫的端點/模型 + 輸入 + 輸出」，讓「最近事件／診斷」面板看得到實際參數。
+const EVENT_BUFFER_MAX = 500;
+const eventBuffer = [];
+
+function nowHHMMSS(d = new Date()) {
+  const p = (n) => String(n).padStart(2, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+function previewText(value, limit = 400) {
+  const s = String(value == null ? "" : value).replace(/\s+/g, " ").trim();
+  return s.length > limit ? s.slice(0, limit - 1) + "…" : s;
+}
+
+function logEvent(level, source, message, details) {
+  const entry = {
+    id: Math.random().toString(16).slice(2, 10),
+    time: nowHHMMSS(),
+    timestamp: Date.now() / 1000,
+    level: String(level || "INFO").toUpperCase(),
+    source: String(source || "GW"),
+    message: String(message == null ? "" : message),
+    details: details || {},
+    origin: "electron",
+  };
+  eventBuffer.push(entry);
+  if (eventBuffer.length > EVENT_BUFFER_MAX) {
+    eventBuffer.splice(0, eventBuffer.length - EVENT_BUFFER_MAX);
+  }
+  return entry;
+}
+
+function bodyPreview(body) {
+  if (!body || typeof body !== "object") return "";
+  if (Array.isArray(body.messages)) return previewText(messagesToPrompt(body.messages));
+  if (typeof body.prompt === "string") return previewText(body.prompt);
+  if (typeof body.input === "string") return previewText(body.input);
+  if (Array.isArray(body.input)) {
+    return previewText(body.input.map((x) => (typeof x === "string" ? x : (x && x.content) || "")).join(" "));
+  }
+  return "";
+}
+
+function isLoopback(req) {
+  const addr = (req.socket && req.socket.remoteAddress) || "";
+  return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
+}
+
+// 合併「閘道自身事件」與「內部 Python Worker 事件」，面板一次看全。
+async function collectEvents(limit = 100) {
+  const max = Math.max(1, Math.min(1000, Number(limit) || 100));
+  const local = eventBuffer.slice(-max);
+  let python = [];
+  try {
+    const r = await fetch(`${PYTHON_BRIDGE_URL}/v1/logs?limit=${max}`, { signal: AbortSignal.timeout(1500) });
+    if (r.ok) {
+      const j = await r.json();
+      python = (j.logs || []).map((e) => ({
+        id: e.id,
+        time: e.time,
+        timestamp: e.timestamp || 0,
+        level: String(e.level || "INFO").toUpperCase(),
+        source: e.source || "BRIDGE",
+        message: e.message || "",
+        details: e.details || {},
+        origin: "python",
+      }));
+    }
+  } catch {}
+  const merged = local.concat(python).sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+  return merged.slice(-max);
+}
+
+// 診斷：閘道端檢查 + 內部 Python Worker 的 doctor 報告。
+async function collectDoctor() {
+  const checks = [
+    {
+      id: "gateway",
+      status: "ok",
+      message: `ModelDock 統一閘道運行中 (${HOST}:${PORT})`,
+      detail: `OpenAI 相容端點 http://${HOST}:${PORT}/v1${API_KEY ? "（已啟用 API Key 保護）" : ""}`,
+    },
+  ];
+
+  const workerAlive = await isPythonBridgeAlive();
+  checks.push({
+    id: "python_worker",
+    status: workerAlive ? "ok" : "error",
+    message: workerAlive
+      ? `Python 直連 Worker 運行中 (port ${INTERNAL_PYTHON_PORT})`
+      : `Python 直連 Worker 無回應 (port ${INTERNAL_PYTHON_PORT})`,
+    detail: workerAlive
+      ? "Gemini / DeepSeek 直連通道可用"
+      : "Gemini / DeepSeek 直連不可用；請重啟 ModelDock 或查看 python_worker.log",
+  });
+
+  try {
+    const login = await checkLogin();
+    checks.push({
+      id: "chatgpt_browser",
+      status: login.chatgpt ? "ok" : "warning",
+      message: login.chatgpt
+        ? "ChatGPT 內嵌瀏覽器就緒（可送出問答）"
+        : "ChatGPT 內嵌瀏覽器尚未就緒（找不到輸入框或頁面未載入）",
+      detail: login.url || "於右側 ChatGPT 分頁完成登入後重試",
+    });
+  } catch (e) {
+    checks.push({
+      id: "chatgpt_browser",
+      status: "warning",
+      message: "ChatGPT 內嵌瀏覽器狀態未知",
+      detail: String((e && e.message) || e),
+    });
+  }
+
+  let report = null;
+  try {
+    const r = await fetch(`${PYTHON_BRIDGE_URL}/v1/doctor`, { signal: AbortSignal.timeout(2500) });
+    if (r.ok) report = await r.json();
+  } catch {}
+
+  if (report && Array.isArray(report.checks)) checks.push(...report.checks);
+
+  const hasError = checks.some((c) => c.status === "error");
+  const hasWarning = checks.some((c) => c.status === "warning");
+  return {
+    overall_status: hasError ? "error" : hasWarning ? "warning" : "ok",
+    version: report && report.version,
+    workspace_root: WORKSPACE_ROOT,
+    checks,
+    available_models: (report && report.available_models) || [],
+  };
+}
+
 function findPythonExe() {
   // 不寫死使用者名稱：寫死路徑（如 C:\Users\<name>\venv）在換帳號／換機器後會靜默失效，
   // 退到系統 Python 又缺依賴 → Worker 秒崩 → 閘道 502。改用 os.homedir() 推導。
@@ -97,10 +232,12 @@ async function ensurePythonWorker() {
   const scriptPath = path.join(WORKSPACE_ROOT, "run_server.py");
   if (!fs.existsSync(scriptPath)) {
     console.log(`[modeldock] run_server.py 不存在於 ${scriptPath}，略過自動啟動 Python。`);
+    logEvent("WARN", "WORKER", "找不到 run_server.py，略過自動啟動 Python Worker", { path: scriptPath });
     return;
   }
 
   console.log(`[modeldock] 正在後台啟動 Python Worker (port ${INTERNAL_PYTHON_PORT})... [${pythonExe}]`);
+  logEvent("INFO", "WORKER", "正在啟動 Python 直連 Worker…", { port: INTERNAL_PYTHON_PORT, python: pythonExe });
   try {
     // stdio: "ignore" 會吞掉 Worker 所有輸出（缺依賴時只看到秒崩卻查不到原因）。
     // 改導到 python_worker.log，打包版也能直接看啟動失敗原因。
@@ -117,6 +254,7 @@ async function ensurePythonWorker() {
     });
     pythonProcess.on("exit", (code) => {
       console.log(`[modeldock] Python Worker 進程結束 (code: ${code})`);
+      logEvent("WARN", "WORKER", `Python Worker 進程結束 (code: ${code})`, { port: INTERNAL_PYTHON_PORT, code });
       pythonProcess = null;
     });
 
@@ -126,11 +264,13 @@ async function ensurePythonWorker() {
       await new Promise((r) => setTimeout(r, 300));
       if (await isPythonBridgeAlive()) {
         console.log(`[modeldock] Python Worker 啟動成功並已就緒 (port ${INTERNAL_PYTHON_PORT})。`);
+        logEvent("INFO", "WORKER", "Python Worker 已就緒", { port: INTERNAL_PYTHON_PORT });
         break;
       }
     }
   } catch (err) {
     console.error("[modeldock] 啟動 Python Worker 失敗:", err);
+    logEvent("ERROR", "WORKER", "Python Worker 啟動失敗", { error: String((err && err.message) || err) });
   }
 }
 
@@ -153,10 +293,12 @@ function shouldForwardToPython(model) {
   return m.startsWith("gemini-") || m.startsWith("deepseek");
 }
 
-async function forwardToPythonBridge(req, res, body) {
+async function forwardToPythonBridge(req, res, body, meta = {}) {
   if (!await isPythonBridgeAlive()) {
     await ensurePythonWorker();
   }
+  const startedAt = meta.startedAt || Date.now();
+  const model = meta.model || (body && body.model) || "";
   const ctrl = new AbortController();
   req.on("close", () => ctrl.abort());
   try {
@@ -175,17 +317,41 @@ async function forwardToPythonBridge(req, res, body) {
         "access-control-allow-origin": "*",
       });
       const reader = r.body.getReader();
+      let bytes = 0;
       try {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
+          bytes += value.length;
           res.write(Buffer.from(value));
         }
       } catch {}
       try { res.end(); } catch {}
+      logEvent("INFO", "DONE", `Python Worker → ${model || "模型"} 串流結束`, {
+        model,
+        status: r.status,
+        stream: true,
+        bytes,
+        duration_ms: Date.now() - startedAt,
+      });
       return;
     }
     const text = await r.text();
+    // 抽出回覆預覽（輸入/輸出參數要看得見）
+    let output = previewText(text.slice(0, 600));
+    try {
+      const j = JSON.parse(text);
+      const content = j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
+      if (typeof content === "string" && content) output = previewText(content);
+      else if (j && j.error) output = previewText(j.error.message || JSON.stringify(j.error));
+    } catch {}
+    logEvent(r.status < 400 ? "INFO" : "ERROR", "DONE", `Python Worker → ${model || "模型"} 回覆完成 (HTTP ${r.status})`, {
+      model,
+      status: r.status,
+      duration_ms: Date.now() - startedAt,
+      output_len: output.length,
+      output,
+    });
     res.writeHead(r.status, {
       "content-type": "application/json; charset=utf-8",
       "access-control-allow-origin": "*",
@@ -193,6 +359,10 @@ async function forwardToPythonBridge(req, res, body) {
     });
     res.end(text);
   } catch (e) {
+    logEvent("ERROR", "DONE", `Python Worker 轉發失敗：${(e && e.message) || e}`, {
+      model,
+      duration_ms: Date.now() - startedAt,
+    });
     return sendJson(res, { error: { message: `Python 直連橋（${PYTHON_BRIDGE_URL}）連線失敗：${(e && e.message) || e}。請確認內部 Python Worker（port ${INTERNAL_PYTHON_PORT}）已啟動且 Token/Cookie 已設定。`, type: "server_error" } }, 502);
   }
 }
@@ -255,6 +425,7 @@ async function harvestGeminiCookies() {
       if (current["1psid"] !== psid || current["1psidts"] !== psidts) {
         fs.writeFileSync(targetFile, JSON.stringify({ "1psid": psid, "1psidts": psidts }, null, 2), "utf-8");
         console.log("[modeldock] 自動同步 gemini_cookies.json 成功！");
+        logEvent("INFO", "SYNC", "Gemini Cookie 已自動同步（背景擷取）", { source: "modeldock-auto" });
       }
       pushToPythonBridge("/v1/cookies", { "1psid": psid, "1psidts": psidts, source: "modeldock-auto" });
       return { ok: true, synced: true, psid: !!psid, psidts: !!psidts };
@@ -319,6 +490,7 @@ async function harvestDeepSeekToken() {
         let prev = "";
         try { prev = JSON.parse(fs.readFileSync(targetFile, "utf-8")).token || ""; } catch {}
         if (prev !== token) {
+          logEvent("INFO", "SYNC", "DeepSeek Token 已自動同步（背景擷取）", { source: "modeldock-auto" });
           try {
             fs.writeFileSync(targetFile, JSON.stringify({ "token": token }, null, 2), "utf-8");
             console.log("[modeldock] 自動同步 deepseek_token.json 成功！");
@@ -800,6 +972,19 @@ function startHttp() {
     if (req.method === "GET" && u.pathname === "/ready") {
       return sendJson(res, { ok: true, service: "modeldock", app: "electron", port: PORT });
     }
+
+    // 最近事件 / 診斷：ModelDock 面板本身要讀得到（本機 loopback 免 key，外部仍需 key）
+    if (req.method === "GET" && (u.pathname === "/v1/logs" || u.pathname === "/logs" || u.pathname === "/v1/doctor" || u.pathname === "/doctor")) {
+      if (!authorized(req) && !isLoopback(req)) {
+        return sendJson(res, { error: "unauthorized", message: "需要正確的 x-api-key。" }, 401);
+      }
+      if (u.pathname === "/v1/logs" || u.pathname === "/logs") {
+        const limit = Number(u.searchParams.get("limit") || 100) || 100;
+        return sendJson(res, { logs: await collectEvents(limit) });
+      }
+      return sendJson(res, await collectDoctor());
+    }
+
     if (!authorized(req)) {
       return sendJson(res, { error: "unauthorized", message: "需要正確的 x-api-key。" }, 401);
     }
@@ -875,15 +1060,23 @@ function startHttp() {
         return sendJson(res, { error: { message: "JSON 格式錯誤。", type: "invalid_request_error" } }, 400);
       }
       const model = (body && body.model) || "webchat/auto";
+      const startedAt = Date.now();
+      const inputPreview = bodyPreview(body);
+      logEvent("INFO", "REQ", `POST /v1/chat/completions ← ${model}`, {
+        endpoint: "/v1/chat/completions",
+        model,
+        stream: body.stream === true,
+        input: inputPreview,
+      });
       // 直連系轉給內部 Python Worker
       if (shouldForwardToPython(model)) {
-        return forwardToPythonBridge(req, res, body);
+        return forwardToPythonBridge(req, res, body, { model, input: inputPreview, startedAt });
       }
       if (model === "webchat/auto" || model === "auto") {
         const hasGemini = fs.existsSync(path.join(WORKSPACE_ROOT, "gemini_cookies.json"));
         const hasDeepSeek = fs.existsSync(path.join(WORKSPACE_ROOT, "deepseek_token.json"));
         if (hasGemini || hasDeepSeek) {
-          return forwardToPythonBridge(req, res, body);
+          return forwardToPythonBridge(req, res, body, { model, input: inputPreview, startedAt });
         }
       }
 
@@ -899,6 +1092,13 @@ function startHttp() {
       req.on("close", () => ctrl.abort());
       try {
         const r = await ask(prompt, { continueConversation: cont, signal: ctrl.signal });
+        logEvent("INFO", "DONE", `ChatGPT → ${model} 回覆完成 (${r.durationMs} ms)`, {
+          model,
+          duration_ms: r.durationMs,
+          output_len: (r.reply || "").length,
+          output: previewText(r.reply),
+          conversation_url: r.conversationUrl,
+        });
         if (stream) {
           const id = `chatcmpl-web-${Date.now().toString(36)}`;
           const created = Math.floor(Date.now() / 1000);
@@ -928,6 +1128,11 @@ function startHttp() {
         });
       } catch (e) {
         const msg = (e && e.message) || String(e);
+        logEvent("ERROR", "DONE", `ChatGPT 問答失敗：${msg}`, {
+          model,
+          duration_ms: Date.now() - startedAt,
+          error: msg,
+        });
         if (e && e.code === "not_logged_in") return sendJson(res, { error: { message: msg, type: "authentication_error" } }, 401);
         return sendJson(res, { error: { message: msg, type: "server_error" } }, 502);
       }
@@ -960,18 +1165,32 @@ function startHttp() {
       if (!String(prompt).trim()) return sendJson(res, { error: "bad_request", message: "缺少 prompt。" }, 400);
 
       const targetModel = model || (activeProvider === "gemini" ? "gemini-web/flash" : (activeProvider === "deepseek" ? "deepseek-web/chat" : "chatgpt-web/auto"));
+      const startedAt = Date.now();
+      logEvent("INFO", "REQ", `POST /chat ← ${targetModel}`, {
+        endpoint: "/chat",
+        model: targetModel,
+        continue: cont,
+        input: previewText(prompt),
+      });
       if (shouldForwardToPython(targetModel)) {
         return forwardToPythonBridge(req, res, {
           model: targetModel,
           messages: [{ role: "user", content: String(prompt) }],
           stream: false,
-        });
+        }, { model: targetModel, input: previewText(prompt), startedAt });
       }
 
       const ctrl = new AbortController();
       req.on("close", () => ctrl.abort());
       try {
         const r = await ask(String(prompt), { continueConversation: cont, signal: ctrl.signal });
+        logEvent("INFO", "DONE", `ChatGPT → ${targetModel} 回覆完成 (${r.durationMs} ms)`, {
+          model: targetModel,
+          duration_ms: r.durationMs,
+          output_len: (r.reply || "").length,
+          output: previewText(r.reply),
+          conversation_url: r.conversationUrl,
+        });
         if (!ct.includes("application/json") && req.headers["accept"]?.includes("text/plain")) {
           res.writeHead(200, { "content-type": "text/plain; charset=utf-8", "access-control-allow-origin": "*" });
           res.end(r.reply);
@@ -980,6 +1199,11 @@ function startHttp() {
         return sendJson(res, { reply: r.reply, model: targetModel, conversationUrl: r.conversationUrl, durationMs: r.durationMs });
       } catch (e) {
         const msg = (e && e.message) || String(e);
+        logEvent("ERROR", "DONE", `ChatGPT 問答失敗：${msg}`, {
+          model: targetModel,
+          duration_ms: Date.now() - startedAt,
+          error: msg,
+        });
         if (e && e.code === "not_logged_in") return sendJson(res, { error: "not_logged_in", message: msg }, 401);
         return sendJson(res, { error: "chatgpt_error", message: msg }, 502);
       }
@@ -992,6 +1216,7 @@ function startHttp() {
       const targetFile = path.join(WORKSPACE_ROOT, "gemini_cookies.json");
       try { fs.writeFileSync(targetFile, JSON.stringify(b, null, 2), "utf-8"); } catch {}
       pushToPythonBridge("/v1/cookies", b);
+      logEvent("INFO", "SYNC", "Gemini Cookie 已由外部推送更新", { source: b.source || "external" });
       return sendJson(res, { ok: true, synced: true });
     }
 
@@ -1001,6 +1226,7 @@ function startHttp() {
       const targetFile = path.join(WORKSPACE_ROOT, "deepseek_token.json");
       try { fs.writeFileSync(targetFile, JSON.stringify(b, null, 2), "utf-8"); } catch {}
       pushToPythonBridge("/v1/deepseek/token", b);
+      logEvent("INFO", "SYNC", "DeepSeek Token 已由外部推送更新", { source: "external" });
       return sendJson(res, { ok: true, synced: true });
     }
 
@@ -1008,6 +1234,12 @@ function startHttp() {
     if (req.method === "POST" && u.pathname === "/v1/responses") {
       let b;
       try { b = JSON.parse(await readBody(req)); } catch { return sendJson(res, { error: "bad json" }, 400); }
+      logEvent("INFO", "REQ", `POST /v1/responses ← ${b.model || "webchat/auto"}`, {
+        endpoint: "/v1/responses",
+        model: b.model || "webchat/auto",
+        stream: true,
+        input: bodyPreview(b),
+      });
       const ctrl = new AbortController();
       req.on("close", () => ctrl.abort());
       try {
@@ -1118,6 +1350,13 @@ async function createWindow() {
     return { ok: true, temporaryChat };
   });
   ipcMain.handle("login-status", checkLogin);
+  // 最近事件 / 診斷（面板讀取；面板本身不必繞 HTTP）
+  ipcMain.handle("get-events", async (_e, limit) => {
+    return { ok: true, logs: await collectEvents(limit || 100) };
+  });
+  ipcMain.handle("get-doctor", async () => {
+    return { ok: true, ...(await collectDoctor()) };
+  });
   ipcMain.handle("get-paths", async () => {
     const serverScript = path.join(WORKSPACE_ROOT, "mcp_server.py");
     return {

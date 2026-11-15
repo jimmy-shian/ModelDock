@@ -6,6 +6,9 @@ contextBridge.exposeInMainWorld('modelDock', {
   showLogin: () => ipcRenderer.invoke('show-login'),
   toggleLogin: () => ipcRenderer.invoke('toggle-login'),
   loginStatus: () => ipcRenderer.invoke('login-status'),
+  // 最近事件 / 診斷（面板讀取）
+  getEvents: (limit) => ipcRenderer.invoke('get-events', limit || 100),
+  getDoctor: () => ipcRenderer.invoke('get-doctor'),
   ask: (prompt, continueConversation) =>
     ipcRenderer.invoke('ask', { prompt, continueConversation: !!continueConversation }),
   newChat: () => ipcRenderer.invoke('new-chat'),

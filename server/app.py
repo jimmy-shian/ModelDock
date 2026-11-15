@@ -5,6 +5,7 @@ Modeled after codex-chatgpt-web/src/server.ts.
 """
 
 import os
+import time
 from pathlib import Path
 from typing import Optional, List, Any, Dict
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
@@ -64,6 +65,49 @@ app.add_middleware(
 )
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+# ==========================================
+# In-memory event previews (最近事件 / 診斷面板)
+# ==========================================
+
+# 每次請求/回覆寫入記憶體事件緩衝區時，輸入/輸出只保留前 N 字（面板看得懂即可）。
+_EVENT_PREVIEW_CHARS = 400
+
+
+def _event_preview(text: Any, limit: int = _EVENT_PREVIEW_CHARS) -> str:
+    """Collapse whitespace and clip text for the events panel."""
+    collapsed = " ".join(str(text or "").split())
+    if len(collapsed) <= limit:
+        return collapsed
+    return collapsed[: limit - 1] + "…"
+
+
+async def _instrumented_turn(turn_generator, model: str, started_at: float):
+    """
+    Pass-through wrapper for the turn stream: forwards every event untouched and
+    logs a DONE event (with output preview) into the in-memory event buffer when
+    the stream finishes, so /v1/logs always shows 被呼叫/輸入/輸出.
+    """
+    last_text = ""
+    try:
+        async for event in turn_generator:
+            text = getattr(event, "text", "") or ""
+            if text:
+                last_text = text
+            yield event
+    finally:
+        hub.logs.log(
+            "INFO",
+            "DONE",
+            f"{model} → 串流完成",
+            {
+                "model": model,
+                "duration_ms": int((time.time() - started_at) * 1000),
+                "output_len": len(last_text),
+                "output": _event_preview(last_text),
+            },
+        )
 
 
 # ==========================================
@@ -160,21 +204,54 @@ async def chat_completions(req: ChatCompletionRequest):
             tool_names.append(str(fn["name"]))
 
     # 2. Dispatch turn through the shared transport resolver.
-    turn_generator, transport_name = _dispatch_turn(
-        prompt=compiled_prompt,
-        model=req.model,
-        is_new_session=is_new_session,
-        session_id=session_id,
-        is_continuation=is_continuation,
-        files=extracted_files,
-    )
-    LOGGER.info("🚀 [SEND] 發送至 Gemini | 傳輸: %s | Prompt長度: %d | 新會話: %s", transport_name, len(compiled_prompt), is_new_session)
+    started_at = time.time()
 
+    # 最近事件：被呼叫的端點/模型 + 輸入內容（截斷預覽），面板直接看得懂。
+    # 先寫事件再轉發，失敗的請求也會留下紀錄（否則出問題時面板反而是空的）。
+    hub.logs.log(
+        "INFO",
+        "REQ",
+        f"{req.model} ← /v1/chat/completions（{'串流' if req.stream else '完整回覆'}）",
+        {
+            "endpoint": "/v1/chat/completions",
+            "model": req.model,
+            "stream": bool(req.stream),
+            "messages": num_msgs,
+            "tools": tool_names,
+            "new_session": is_new_session,
+            "session_id": session_id[:8],
+            "input": _event_preview(compiled_prompt),
+        },
+    )
+
+    try:
+        turn_generator, transport_name = _dispatch_turn(
+            prompt=compiled_prompt,
+            model=req.model,
+            is_new_session=is_new_session,
+            session_id=session_id,
+            is_continuation=is_continuation,
+            files=extracted_files,
+        )
+    except Exception as e:
+        hub.logs.log(
+            "ERROR",
+            "DONE",
+            f"{req.model} → 請求失敗：{(e and getattr(e, 'detail', None)) or e}",
+            {
+                "endpoint": "/v1/chat/completions",
+                "model": req.model,
+                "duration_ms": int((time.time() - started_at) * 1000),
+                "error": str((e and getattr(e, "detail", None)) or e),
+            },
+        )
+        raise
+    LOGGER.info("🚀 [SEND] 發送至 Gemini | 傳輸: %s | Prompt長度: %d | 新會話: %s", transport_name, len(compiled_prompt), is_new_session)
 
     if req.stream:
         return StreamingResponse(
             stream_openai_completions(
-                turn_generator,
+                _instrumented_turn(turn_generator, req.model, started_at),
                 model=req.model,
                 available_tool_names=tool_names,
             ),
@@ -191,6 +268,29 @@ async def chat_completions(req: ChatCompletionRequest):
             turn_generator,
             model=req.model,
             available_tool_names=tool_names,
+        )
+        # 最近事件：輸出內容（截斷預覽）+ 耗時，完成後直接看得到回覆。
+        output_text = ""
+        finish_reason = None
+        try:
+            choice = resp.choices[0]
+            finish_reason = choice.finish_reason
+            content = choice.message.content
+            output_text = content if isinstance(content, str) else ""
+        except (IndexError, AttributeError):
+            pass
+        hub.logs.log(
+            "INFO",
+            "DONE",
+            f"{req.model} → 回覆完成",
+            {
+                "model": req.model,
+                "transport": transport_name,
+                "duration_ms": int((time.time() - started_at) * 1000),
+                "output_len": len(output_text),
+                "finish": finish_reason,
+                "output": _event_preview(output_text),
+            },
         )
         return resp.model_dump()
 
@@ -216,10 +316,22 @@ async def responses_api(req: ResponsesRequest):
     else:
         prompt_text = SessionManager.compile_prompt(messages=[{"role": "user", "content": str(req.input)}], tools=req.tools)
 
+    started_at = time.time()
+    hub.logs.log(
+        "INFO",
+        "REQ",
+        f"{req.model} ← /v1/responses",
+        {
+            "endpoint": "/v1/responses",
+            "model": req.model,
+            "stream": True,
+            "input": _event_preview(prompt_text),
+        },
+    )
     turn_generator, transport_name = _dispatch_turn(prompt_text, req.model)
 
     return StreamingResponse(
-        stream_responses_api(turn_generator, model=req.model),
+        stream_responses_api(_instrumented_turn(turn_generator, req.model, started_at), model=req.model),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -414,9 +526,21 @@ async def dev_synthetic_turn(payload: dict):
     if not prompt:
         raise HTTPException(status_code=400, detail="Prompt is required.")
 
+    started_at = time.time()
     turn_gen, transport_name = _dispatch_turn(prompt, model)
+    hub.logs.log(
+        "INFO",
+        "REQ",
+        f"{model} ← /v1/dev/turn（儀表板測試）",
+        {
+            "endpoint": "/v1/dev/turn",
+            "model": model,
+            "transport": transport_name,
+            "input": _event_preview(prompt),
+        },
+    )
     return StreamingResponse(
-        stream_openai_completions(turn_gen, model=model),
+        stream_openai_completions(_instrumented_turn(turn_gen, model, started_at), model=model),
         media_type="text/event-stream",
         headers={"X-W2L-Transport": transport_name},
     )

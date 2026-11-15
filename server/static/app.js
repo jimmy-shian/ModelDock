@@ -212,6 +212,20 @@ async function fetchStatus() {
 }
 
 /* ========== Logs ========== */
+function renderEventDetails(details) {
+  // details 內含被呼叫的端點/模型、輸入、輸出等參數，事件列要看得見。
+  if (!details || typeof details !== 'object') return '';
+  const entries = Object.entries(details).filter(([, v]) =>
+    v !== null && v !== undefined && v !== '' && !(Array.isArray(v) && !v.length));
+  if (!entries.length) return '';
+  const rows = entries.map(([k, v]) => {
+    const text = typeof v === 'string' ? v : JSON.stringify(v);
+    return '<div class="ev-det"><span class="ev-det-k">' + esc(k) + '</span>' +
+      '<span class="ev-det-v">' + esc(text) + '</span></div>';
+  }).join('');
+  return '<div class="ev-details">' + rows + '</div>';
+}
+
 async function fetchLogs() {
   try {
     const r = await fetch('/v1/logs?limit=80', { cache: 'no-store' });
@@ -223,9 +237,10 @@ async function fetchLogs() {
       c.innerHTML = lastLogs.length
         ? lastLogs.map((x) =>
             '<div class="event"><span class="ev-time">' + esc(x.time) + '</span>' +
-            '<span class="ev-level ' + esc(x.level.toLowerCase()) + '">' + esc(x.level) + '</span>' +
+            '<span class="ev-level ' + esc(String(x.level || 'info').toLowerCase()) + '">' + esc(x.level) + '</span>' +
             '<span class="ev-src">' + esc(x.source) + '</span>' +
-            '<span class="ev-msg">' + esc(x.message) + '</span></div>'
+            '<span class="ev-msg">' + esc(x.message) + '</span>' +
+            renderEventDetails(x.details) + '</div>'
           ).join('')
         : '<div class="event empty">尚無事件</div>';
         const summary = $('logsSummary');

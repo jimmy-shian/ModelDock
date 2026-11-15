@@ -270,7 +270,7 @@ async function refreshStatus() {
     } else {
       // Fallback: check HTTP health
       try {
-        const r = await fetch(BASE + '/health', { signal: AbortSignal.timeout(3000) });
+        const r = await fetch(apiBase() + '/health', { signal: AbortSignal.timeout(3000) });
         if (r.ok) {
           const j = await r.json();
           $('httpStatus').textContent = 'Running (:8765)';
@@ -298,6 +298,148 @@ function setDot(id, cls) {
   const dot = $(id);
   dot.className = 'status-dot';
   if (cls) dot.classList.add(cls);
+}
+
+/* ===== 最近事件 / 診斷 ===== */
+/* 原本這兩個分頁只有空殼（沒有任何資料來源），永遠顯示「尚無事件／讀取中…」。
+   現在接上 /v1/logs 與 /v1/doctor，並把被呼叫的模型、輸入、輸出攤開來看。 */
+function esc(s) {
+  const amp = String.fromCharCode(38);
+  const M = {
+    '&': amp + 'amp;',
+    '<': amp + 'lt;',
+    '>': amp + 'gt;',
+    '"': amp + 'quot;',
+    "'": amp + '#39;',
+  };
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => M[c]);
+}
+function levelClass(level) {
+  const s = String(level || '').toLowerCase();
+  if (s.startsWith('err')) return 'error';
+  if (s.startsWith('warn')) return 'warn';
+  if (s === 'debug') return 'debug';
+  return 'info';
+}
+function detailRows(details) {
+  if (!details || typeof details !== 'object') return [];
+  const labels = { model: '模型', input: '輸入', output: '輸出' };
+  const rows = [];
+  for (const [k, v] of Object.entries(details)) {
+    if (v === null || v === undefined || v === '' || (Array.isArray(v) && !v.length)) continue;
+    rows.push([labels[k] || k, typeof v === 'string' ? v : JSON.stringify(v)]);
+  }
+  return rows;
+}
+
+let eventsSignature = '';
+function renderEvents(logs) {
+  const list = $('eventList');
+  if (!list) return;
+  const items = (logs || []).slice().reverse(); // 最新在上
+  const count = $('eventCount');
+  if (count) count.textContent = String(items.length);
+  const sig = items.map((e) => `${e.time}|${e.source}|${e.message}`).join('\n');
+  if (sig === eventsSignature) return; // 內容沒變就不重畫（避免閃爍／捲動跳動）
+  eventsSignature = sig;
+  list.innerHTML = '';
+  if (!items.length) {
+    list.innerHTML = '<div class="event-empty">尚無事件。送出一次請求後，這裡會顯示被呼叫的模型、輸入與輸出。</div>';
+    return;
+  }
+  for (const e of items) {
+    const row = document.createElement('div');
+    row.className = 'event-item';
+    const head = document.createElement('div');
+    head.className = 'ev-head';
+    head.innerHTML =
+      '<span class="ev-time">' + esc(e.time) + '</span>' +
+      '<span class="ev-level ' + levelClass(e.level) + '">' + esc(e.level) + '</span>' +
+      '<span class="ev-src">' + esc(e.source || '-') + '</span>' +
+      (e.origin === 'python' ? '<span class="ev-origin">PY</span>' : '') +
+      '<span class="ev-msg">' + esc(e.message) + '</span>';
+    row.appendChild(head);
+    const rows = detailRows(e.details);
+    if (rows.length) {
+      const det = document.createElement('div');
+      det.className = 'ev-details';
+      for (const [k, v] of rows) {
+        const line = document.createElement('div');
+        line.className = 'ev-det';
+        line.innerHTML = '<span class="ev-det-k">' + esc(k) + '</span><span class="ev-det-v">' + esc(v) + '</span>';
+        det.appendChild(line);
+      }
+      row.appendChild(det);
+    }
+    list.appendChild(row);
+  }
+}
+
+function apiBase() {
+  // 外部瀏覽器開啟儀表板時用同源（ port 不一定是 8765）；桌面 App（file://）才用固定 BASE。
+  if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
+    return window.location.origin;
+  }
+  return BASE;
+}
+
+async function fetchEvents() {
+  try {
+    let logs = null;
+    if (window.modelDock?.getEvents) {
+      const r = await window.modelDock.getEvents(120);
+      if (r && Array.isArray(r.logs)) logs = r.logs;
+    }
+    if (!logs) {
+      const r = await fetch(`${apiBase()}/v1/logs?limit=120`, { cache: 'no-store', signal: AbortSignal.timeout(4000) });
+      if (r.ok) logs = (await r.json()).logs || [];
+    }
+    renderEvents(logs || []);
+  } catch (e) {
+    const list = $('eventList');
+    if (list && !list.children.length) {
+      list.innerHTML = '<div class="event-empty">讀取最近事件失敗（內部 Worker 未啟動？稍後會自動重試）。</div>';
+    }
+  }
+}
+
+function renderDoctor(report) {
+  const el = $('doctorOutput');
+  if (!el) return;
+  const checks = (report && report.checks) || [];
+  const sum = $('doctorCount');
+  const bad = checks.filter((c) => c.status === 'error').length;
+  const warn = checks.filter((c) => c.status === 'warning').length;
+  if (sum) sum.textContent = checks.length ? (bad ? `${bad} 異常` : warn ? `${warn} 警告` : '正常') : '--';
+  if (!checks.length) {
+    el.innerHTML = '<div class="hint-text">目前沒有診斷項目。</div>';
+    return;
+  }
+  el.innerHTML = checks.map((c) =>
+    '<div class="check-row"><span class="check-dot ' + esc(c.status) + '"></span>' +
+    '<div class="check-body"><b>' + esc(c.message) + '</b>' +
+    (c.detail ? '<div class="check-detail">' + esc(c.detail) + '</div>' : '') + '</div></div>'
+  ).join('');
+}
+
+async function fetchDoctor() {
+  try {
+    let report = null;
+    if (window.modelDock?.getDoctor) {
+      const r = await window.modelDock.getDoctor();
+      if (r && Array.isArray(r.checks)) report = r;
+    }
+    if (!report) {
+      const r = await fetch(`${apiBase()}/v1/doctor`, { cache: 'no-store', signal: AbortSignal.timeout(6000) });
+      if (r.ok) report = await r.json();
+    }
+    renderDoctor(report || {});
+  } catch (e) {
+    const el = $('doctorOutput');
+    if (el) el.textContent = '診斷端點無法讀取（內部 Python Worker 未啟動？）。';
+    const sum = $('doctorCount');
+    if (sum) sum.textContent = '無法讀取';
+  }
 }
 
 /* ===== Send Prompt ===== */
@@ -354,7 +496,7 @@ $('btnCopyLogs').onclick = () => {
   const text = Array.from(items).map(el => el.textContent).join('\n');
   copyToClipboard(text || '(no events)', $('btnCopyLogs'));
 };
-$('btnRefresh').onclick = () => refreshStatus();
+$('btnRefresh').onclick = () => { refreshStatus(); fetchEvents(); fetchDoctor(); };
 
 /* ===== Init ===== */
 initCustomDropdowns();
@@ -387,4 +529,9 @@ let pageVisible = !document.hidden;
 document.addEventListener('visibilitychange', () => { pageVisible = !document.hidden; });
 buildHelp();
 refreshStatus();
+// 最近事件 / 診斷：原本沒有任何資料來源，這裡接上 /v1/logs 與 /v1/doctor
+fetchEvents();
+fetchDoctor();
 setInterval(() => { if (!asking && pageVisible) refreshStatus(); }, 5000);
+setInterval(() => { if (!asking && pageVisible) fetchEvents(); }, 3000);
+setInterval(() => { if (pageVisible) fetchDoctor(); }, 30000);
