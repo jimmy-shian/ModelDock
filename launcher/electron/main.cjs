@@ -5,6 +5,7 @@
 // - 擴充套件完全可有可無：無外掛亦可 100% 獨立運行。
 const { app, BrowserWindow, WebContentsView, ipcMain, session, nativeTheme, Tray, Menu, nativeImage } = require("electron");
 const http = require("node:http");
+const os = require("node:os");
 const path = require("node:path");
 const fs = require("node:fs");
 const net = require("node:net");
@@ -53,9 +54,11 @@ const PYTHON_BRIDGE_URL = (process.env.PYTHON_BRIDGE_URL || "").trim()
 let pythonProcess = null;
 
 function findPythonExe() {
+  // 不寫死使用者名稱：寫死路徑（如 C:\Users\<name>\venv）在換帳號／換機器後會靜默失效，
+  // 退到系統 Python 又缺依賴 → Worker 秒崩 → 閘道 502。改用 os.homedir() 推導。
   const candidates = [
     process.env.PYTHON_EXE,
-    "C:\\Users\\Administrator\\venv\\Scripts\\python.exe",
+    path.join(os.homedir(), "venv", "Scripts", "python.exe"),
     path.join(WORKSPACE_ROOT, "venv", "Scripts", "python.exe"),
     path.join(WORKSPACE_ROOT, ".venv", "Scripts", "python.exe"),
   ];
@@ -65,8 +68,12 @@ function findPythonExe() {
   if (process.platform === "win32") {
     try {
       const out = execSync("where python", { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
-      const firstLine = out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)[0];
-      if (firstLine && fs.existsSync(firstLine)) return firstLine;
+      // 排除 Microsoft Store 的 App Execution Alias stub（執行只會靜默失敗或開商店）。
+      const lines = out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
+        .filter((p) => !/\\WindowsApps\\/i.test(p));
+      for (const p of lines) {
+        if (fs.existsSync(p)) return p;
+      }
     } catch {}
   }
   return "python";
@@ -95,10 +102,17 @@ async function ensurePythonWorker() {
 
   console.log(`[modeldock] 正在後台啟動 Python Worker (port ${INTERNAL_PYTHON_PORT})... [${pythonExe}]`);
   try {
+    // stdio: "ignore" 會吞掉 Worker 所有輸出（缺依賴時只看到秒崩卻查不到原因）。
+    // 改導到 python_worker.log，打包版也能直接看啟動失敗原因。
+    let stdio = "ignore";
+    try {
+      const logFd = fs.openSync(path.join(WORKSPACE_ROOT, "python_worker.log"), "a");
+      stdio = ["ignore", logFd, logFd];
+    } catch {}
     pythonProcess = spawn(pythonExe, [scriptPath, "start", "--port", String(INTERNAL_PYTHON_PORT)], {
       cwd: WORKSPACE_ROOT,
       env: { ...process.env, W2L_PORT: String(INTERNAL_PYTHON_PORT), W2L_WORKSPACE: WORKSPACE_ROOT },
-      stdio: "ignore",
+      stdio,
       windowsHide: true,
     });
     pythonProcess.on("exit", (code) => {
@@ -106,8 +120,10 @@ async function ensurePythonWorker() {
       pythonProcess = null;
     });
 
-    for (let i = 0; i < 15; i++) {
-      await new Promise((r) => setTimeout(r, 200));
+    // uvicorn 冷啟動（含 import）實測約 5-10 秒；原本只等 3 秒，第一發請求容易 502。
+    for (let i = 0; i < 50; i++) {
+      if (!pythonProcess) break; // 進程已結束（例如缺依賴秒崩），不必乾等。
+      await new Promise((r) => setTimeout(r, 300));
       if (await isPythonBridgeAlive()) {
         console.log(`[modeldock] Python Worker 啟動成功並已就緒 (port ${INTERNAL_PYTHON_PORT})。`);
         break;

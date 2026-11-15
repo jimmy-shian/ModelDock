@@ -1,9 +1,9 @@
 {
   "mcpServers": {
     "gemini-analyzer": {
-      "command": "C:\\Users\\Administrator\\venv\\Scripts\\python.exe",
+      "command": "C:\\Users\\botsz\\venv\\Scripts\\python.exe",
       "args": [
-        "C:\\Users\\Administrator\\Desktop\\html_test\\ModelDock\\mcp_server.py"
+        "C:\\Users\\botsz\\Desktop\\html_test\\ModelDock\\mcp_server.py"
       ],
       "env": {
         "W2L_WORKSPACE": ""

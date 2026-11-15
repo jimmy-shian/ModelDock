@@ -20,7 +20,7 @@
 
 ### 1.1 環境需求
 - 系統：Windows
-- Python 虛擬環境：`C:\Users\Administrator\venv\Scripts\python.exe` (或 Python 3.10+)
+- Python：3.10+（App 會自動偵測 venv 或系統 Python，路徑免寫死）
 - 運行環境：[Bun](https://bun.sh/) 1.4+ (或直接執行封裝版 exe)
 
 ### 1.2 登入與憑證獲取（本地直接登入，免裝外掛）
@@ -38,7 +38,7 @@
 ### 1.3 驗證環境
 在終端機執行自我診斷：
 ```powershell
-& "C:\Users\Administrator\venv\Scripts\python.exe" mcp_server.py --doctor
+python mcp_server.py --doctor
 ```
 看到 `[*] Gemini Cookie Configured: True` 即代表準備就緒！
 
@@ -54,9 +54,9 @@
 {
   "mcpServers": {
     "modeldock-analyzer": {
-      "command": "C:\\Users\\Administrator\\venv\\Scripts\\python.exe",
+      "command": "python",
       "args": [
-        "C:\\Users\\Administrator\\Desktop\\html_test\\ModelDock\\mcp_server.py"
+        "<ModelDock 目錄>\\mcp_server.py"
       ],
       "env": {
         "W2L_WORKSPACE": "${workspaceFolder}"
@@ -75,8 +75,8 @@
 ### 2.2 Kilo Code
 在 Kilo Code 的 MCP 設定面板中新增伺服器：
 - **Server Name**: `modeldock-analyzer`
-- **Command**: `C:\Users\Administrator\venv\Scripts\python.exe`
-- **Args**: `C:\Users\Administrator\Desktop\html_test\ModelDock\mcp_server.py`
+- **Command**: `python`
+- **Args**: `<ModelDock 目錄>\mcp_server.py`
 - 或直接匯入 `mcp_configs/kilo_mcp_settings.json`。
 
 ### 2.3 Cursor IDE
@@ -85,9 +85,9 @@
 {
   "mcpServers": {
     "modeldock-analyzer": {
-      "command": "C:\\Users\\Administrator\\venv\\Scripts\\python.exe",
+      "command": "python",
       "args": [
-        "C:\\Users\\Administrator\\Desktop\\html_test\\ModelDock\\mcp_server.py"
+        "<ModelDock 目錄>\\mcp_server.py"
       ],
       "env": {
         "W2L_WORKSPACE": "${workspaceFolder}"
@@ -103,12 +103,12 @@
 {
   "mcpServers": {
     "modeldock-analyzer": {
-      "command": "C:\\Users\\Administrator\\venv\\Scripts\\python.exe",
+      "command": "python",
       "args": [
-        "C:\\Users\\Administrator\\Desktop\\html_test\\ModelDock\\mcp_server.py"
+        "<ModelDock 目錄>\\mcp_server.py"
       ],
       "env": {
-        "W2L_WORKSPACE": "C:\\Users\\Administrator\\Desktop\\html_test\\ModelDock"
+        "W2L_WORKSPACE": "${workspaceFolder}"
       }
     }
   }
@@ -180,5 +180,5 @@ curl.exe -X POST http://127.0.0.1:8765/v1/chat/completions -H "Content-Type: app
 
 ### Q: 如何執行全套自動化測試？
 ```powershell
-& "C:\Users\Administrator\venv\Scripts\python.exe" -m pytest tests -s
+python -m pytest tests -s
 ```

@@ -106,9 +106,9 @@ Invoke-RestMethod -Uri "http://127.0.0.1:8765/v1/chat/completions" -Method Post 
 {
   "mcpServers": {
     "modeldock-analyzer": {
-      "command": "C:\\Users\\Administrator\\venv\\Scripts\\python.exe",
+      "command": "python",
       "args": [
-        "C:\\Users\\Administrator\\Desktop\\html_test\\ModelDock\\mcp_server.py"
+        "<ModelDock 目錄>\\mcp_server.py"
       ],
       "env": {
         "W2L_WORKSPACE": "${workspaceFolder}"
@@ -137,7 +137,7 @@ Invoke-RestMethod -Uri "http://127.0.0.1:8765/v1/chat/completions" -Method Post 
 ModelDock 具備 104 項單元測試，完整覆蓋 MCP 協定、WASM PoW 解題、串流配接與沙箱安全：
 
 ```powershell
-& "C:\Users\Administrator\venv\Scripts\python.exe" -m pytest tests -q
+python -m pytest tests -q
 ```
 
 ---

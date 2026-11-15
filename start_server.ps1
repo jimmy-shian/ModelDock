@@ -27,7 +27,7 @@ if ($packagedExe) {
     exit 0
 }
 
-$pythonExe = "C:\Users\Administrator\venv\Scripts\python.exe"
+$pythonExe = "C:\Users\botsz\venv\Scripts\python.exe"
 if (-not (Test-Path $pythonExe)) { $pythonExe = "python" }
 
 Write-Host "[ModelDock] Launching Python backend directly on 8765..." -ForegroundColor Yellow

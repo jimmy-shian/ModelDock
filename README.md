@@ -95,7 +95,7 @@ Invoke-RestMethod -Uri "http://127.0.0.1:8765/v1/chat/completions" -Method Post 
 給 AI 的一句話（範例，實際路徑由 App 自動填入）：
 
 ```text
-ModelDock 已安裝在本機的「C:\Users\Administrator\Desktop\html_test\ModelDock」，MCP 伺服器入口是「...\mcp_server.py」。請你自動偵測本機 Python（優先用同目錄 venv 或系統 python），把上述 mcp_server.py 以 stdio 方式註冊為名為 modeldock 的 MCP server，不需要我手動填絕對路徑；若路徑含空格請自動加引號處理，註冊後呼叫 mcp_doctor 回報是否就緒。
+ModelDock 已安裝在本機的「<安裝目錄>」，MCP 伺服器入口是「...\mcp_server.py」。請你自動偵測本機 Python（優先用同目錄 venv 或系統 python），把上述 mcp_server.py 以 stdio 方式註冊為名為 modeldock 的 MCP server，不需要我手動填絕對路徑；若路徑含空格請自動加引號處理，註冊後呼叫 mcp_doctor 回報是否就緒。
 ```
 
 或一鍵自動註冊（路徑自動抓取，每個人不同也不用改）：
@@ -139,7 +139,7 @@ ModelDock 已安裝在本機的「C:\Users\Administrator\Desktop\html_test\Model
 ModelDock 具備 104 項單元測試，完整覆蓋 MCP 協定、WASM PoW 解題、串流配接與沙箱安全：
 
 ```powershell
-& "C:\Users\Administrator\venv\Scripts\python.exe" -m pytest tests -q
+python -m pytest tests -q
 ```
 
 ---

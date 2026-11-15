@@ -7,7 +7,7 @@ Set shell = CreateObject("WScript.Shell")
 scriptDir = fso.GetParentFolderName(WScript.ScriptFullName)
 
 ' Prefer the project venv's windowless python, fall back to PATH.
-pythonw = "C:\Users\Administrator\venv\Scripts\pythonw.exe"
+pythonw = "C:\Users\botsz\venv\Scripts\pythonw.exe"
 If Not fso.FileExists(pythonw) Then pythonw = "pythonw.exe"
 
 shell.CurrentDirectory = scriptDir

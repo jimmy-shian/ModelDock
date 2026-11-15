@@ -23,6 +23,6 @@ for %%f in ("ModelDock-*-win-x64.exe") do (
 )
 
 echo [ModelDock] 後備啟動：使用 Python 引擎啟動...
-set "PYTHON_EXE=C:\Users\Administrator\venv\Scripts\python.exe"
+set "PYTHON_EXE=C:\Users\botsz\venv\Scripts\python.exe"
 if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"
 "%PYTHON_EXE%" run_server.py start
