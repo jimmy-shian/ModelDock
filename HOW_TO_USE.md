@@ -26,8 +26,11 @@
 ### 1.2 登入與憑證獲取（本地直接登入，免裝外掛）
 1. 啟動 ModelDock 應用：
    ```powershell
+   # 已安裝版（或從桌面／開始功能表開啟）
+   %LOCALAPPDATA%\Programs\ModelDock\ModelDock.exe
+
+   # 或原始碼開發模式（需 Bun 1.4+）
    bun start
-   # 或雙擊 start_server.bat
    ```
 2. 在 ModelDock 右側內嵌瀏覽器分頁分別切換：
    - **Gemini**：登入 Google 帳號一次，ModelDock 自動在背景萃取 `__Secure-1PSID` 並儲存至 `gemini_cookies.json`。

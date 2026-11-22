@@ -80,8 +80,7 @@ ModelDock 支援一鍵打包為 Windows NSIS 安裝檔（`ModelDock-*-win-x64.ex
 2. **路徑動態適配 (`getWorkspaceRoot`)**：
    - 在開發環境下，指向原始碼專案根目錄。
    - 在已打包環境下，自動鎖定 `ModelDock.exe` 所在目錄，確保 `run_server.py` 能被可靠定位並自動啟動。
-3. **啟動引導優先順序 (`start_server.bat` / `start_server.ps1`)**：
-   - 優先順序 1：本機有 Bun 1.4+ 則執行 `bun start`（原始碼開發模式）。
-   - 優先順序 2：若本機已安裝 ModelDock，優先啟動 `%LOCALAPPDATA%\Programs\ModelDock\ModelDock.exe`。
-   - 優先順序 3：若存在安裝檔 `ModelDock-*-win-x64.exe` 則啟動安裝程式。
-   - 優先順序 4：無 Electron 環境時，退回純 Python 後端獨立運作。
+3. **啟動方式**：
+   - 封裝安裝版：直接執行 `%LOCALAPPDATA%\Programs\ModelDock\ModelDock.exe`（或從開始功能表／桌面捷徑啟動）。
+   - 開發模式：在專案根目錄執行 `bun start`（需 Bun 1.4+）。
+   - 純後端模式：執行 `python run_server.py start` 獨立啟動 Python Worker。

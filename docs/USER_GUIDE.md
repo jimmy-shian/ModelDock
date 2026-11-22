@@ -9,13 +9,10 @@
 ### 1.1 一鍵啟動
 
 ```powershell
-# 方式 A：雙擊執行
-start_server.bat
+# 方式 A：啟動已安裝版（或雙擊桌面捷徑）
+%LOCALAPPDATA%\Programs\ModelDock\ModelDock.exe
 
-# 方式 B：PowerShell 腳本
-.\start_server.ps1
-
-# 方式 C：開發模式 (需 Bun 1.4+)
+# 方式 B：開發模式（需 Bun 1.4+）
 bun start
 ```
 

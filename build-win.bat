@@ -17,6 +17,14 @@ REM ---- [0/5] env check ----
 echo [0/5] Checking environment...
 where bun >nul 2>&1
 if errorlevel 1 (
+  if exist "%USERPROFILE%\.bun\bin\bun.exe" (
+    set "PATH=%USERPROFILE%\.bun\bin;%PATH%"
+  ) else if exist "%LOCALAPPDATA%\bun\bin\bun.exe" (
+    set "PATH=%LOCALAPPDATA%\bun\bin;%PATH%"
+  )
+)
+where bun >nul 2>&1
+if errorlevel 1 (
   echo [ERROR] bun not found. Install Bun 1.4+ from https://bun.sh/ then retry.
   pause
   exit /b 1
@@ -72,7 +80,9 @@ echo     Deps done.
 
 REM ---- [3/5] typecheck ----
 echo.
-echo [3/5] Typecheck...
+echo [3/5] Syncing version and running typecheck...
+call bun -e "const fs=require('fs');const root=JSON.parse(fs.readFileSync('package.json','utf8'));const f='launcher/package.json';const sub=JSON.parse(fs.readFileSync(f,'utf8'));if(root.version){if(sub.version===root.version){console.log('    Version in sync: '+sub.version);}else{sub.version=root.version;fs.writeFileSync(f,JSON.stringify(sub,null,2)+'\n');console.log('    Synced launcher version to '+root.version);}}"
+if errorlevel 1 goto :fail
 call bun run --cwd launcher typecheck
 if errorlevel 1 (
   echo [WARN] typecheck failed. Press any key to continue, Ctrl+C to abort...

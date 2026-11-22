@@ -1,6 +1,6 @@
 {
   "name": "modeldock",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "private": true,
   "description": "ModelDock 桌面應用（Electron，內含瀏覽器，多模型統一管理）",
   "type": "commonjs",
@@ -9,8 +9,8 @@
     "start": "electron .",
     "dev": "electron .",
     "typecheck": "node --check electron/main.cjs && node --check electron/preload.cjs && node --check electron/automation.cjs",
-    "package:win": "electron-builder --win",
-    "dist": "electron-builder"
+    "package:win": "electron-builder --win --publish never",
+    "dist": "electron-builder --publish never"
   },
   "dependencies": {},
   "devDependencies": {
@@ -22,8 +22,16 @@
     "productName": "ModelDock",
     "artifactName": "ModelDock-${version}-${os}-${arch}.${ext}",
     "asar": true,
-    "directories": { "output": "release" },
-    "files": ["electron/**", "renderer/**", "build/**", "package.json"],
+    "publish": null,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "electron/**",
+      "renderer/**",
+      "build/**",
+      "package.json"
+    ],
     "extraFiles": [
       {
         "from": "../server",
@@ -68,7 +76,9 @@
     ],
     "icon": "build/icon",
     "win": {
-      "target": ["nsis"],
+      "target": [
+        "nsis"
+      ],
       "icon": "build/icon.ico",
       "requestedExecutionLevel": "asInvoker"
     },
