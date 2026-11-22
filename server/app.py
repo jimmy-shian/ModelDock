@@ -33,6 +33,7 @@ from server.browser.gemini_direct import (
     is_configured as direct_is_configured,
     save_cookies,
     load_cookies,
+    cookies_signature,
 )
 from server.browser.deepseek_direct import (
     is_configured as deepseek_is_configured,
@@ -369,17 +370,35 @@ async def save_cookies_endpoint(payload: dict):
     """
     one_psid = str(payload.get("1psid", "") or payload.get("__Secure-1PSID", "")).strip()
     one_psidts = str(payload.get("1psidts", "") or payload.get("__Secure-1PSIDTS", "")).strip()
+    raw_cookies = payload.get("cookies") if isinstance(payload.get("cookies"), list) else None
     source = str(payload.get("source", "manual") or "manual")
     reason = str(payload.get("reason", "") or "")
+
+    if not one_psid and raw_cookies:
+        for item in raw_cookies:
+            if isinstance(item, dict) and item.get("name") == "__Secure-1PSID" and item.get("value"):
+                one_psid = str(item["value"]).strip()
+                break
+    if not one_psidts and raw_cookies:
+        for item in raw_cookies:
+            if isinstance(item, dict) and item.get("name") == "__Secure-1PSIDTS" and item.get("value"):
+                one_psidts = str(item["value"]).strip()
+                break
 
     if not one_psid:
         raise HTTPException(status_code=400, detail="1psid is required.")
 
     current = load_cookies()
-    if current.get("1psid") == one_psid and current.get("1psidts") == one_psidts:
+    # Preserve existing full cookie list if a legacy caller sends only 1psid/1psidts for the same session.
+    effective_cookies = raw_cookies
+    if effective_cookies is None and current.get("1psid") == one_psid and current.get("cookies"):
+        effective_cookies = current.get("cookies")
+
+    incoming = {"1psid": one_psid, "1psidts": one_psidts, "cookies": effective_cookies or []}
+    if cookies_signature(current) == cookies_signature(incoming):
         return {"status": "ok", "configured": True, "message": "Cookies unchanged"}
 
-    if not save_cookies(one_psid, one_psidts):
+    if not save_cookies(one_psid, one_psidts, cookies=effective_cookies):
         raise HTTPException(status_code=500, detail="Failed to write gemini_cookies.json.")
 
     # Hot-reload the direct Gemini engine so updated cookies take effect immediately

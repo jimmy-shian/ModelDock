@@ -411,24 +411,55 @@ function pushToPythonBridge(apiPath, payload) {
 async function harvestGeminiCookies() {
   try {
     const ses = session.fromPartition(PARTITION);
-    const cookies = await ses.cookies.get({ domain: ".google.com" });
+    const [googleCookies, geminiCookies] = await Promise.all([
+      ses.cookies.get({ domain: ".google.com" }).catch(() => []),
+      ses.cookies.get({ url: "https://gemini.google.com" }).catch(() => []),
+    ]);
+    const byKey = new Map();
+    for (const c of [...googleCookies, ...geminiCookies]) {
+      if (!c || !c.name || !c.value) continue;
+      const dom = String(c.domain || ".google.com").trim();
+      const normDom = dom.replace(/^\./, "").toLowerCase();
+      if (normDom === "accounts.google.com" || normDom.endsWith(".accounts.google.com")) continue;
+      if (normDom !== "google.com" && !normDom.endsWith(".google.com")) continue;
+      const cookiePath = String(c.path || "/").trim() || "/";
+      const entry = {
+        name: c.name,
+        value: c.value,
+        domain: dom,
+        path: cookiePath,
+        secure: Boolean(c.secure),
+      };
+      if (typeof c.expirationDate === "number" && c.expirationDate > 0) {
+        entry.expires = c.expirationDate;
+      }
+      byKey.set(`${dom}|${cookiePath}|${c.name}`, entry);
+    }
+    const cookieList = Array.from(byKey.values()).sort((a, b) =>
+      `${a.domain}|${a.path}|${a.name}`.localeCompare(`${b.domain}|${b.path}|${b.name}`)
+    );
     let psid = "";
     let psidts = "";
-    for (const c of cookies) {
+    for (const c of cookieList) {
       if (c.name === "__Secure-1PSID") psid = c.value;
       if (c.name === "__Secure-1PSIDTS") psidts = c.value;
     }
     if (psid) {
+      const nextPayload = { "1psid": psid, "1psidts": psidts, cookies: cookieList };
       const targetFile = path.join(WORKSPACE_ROOT, "gemini_cookies.json");
-      let current = {};
-      try { if (fs.existsSync(targetFile)) current = JSON.parse(fs.readFileSync(targetFile, "utf-8")); } catch {}
-      if (current["1psid"] !== psid || current["1psidts"] !== psidts) {
-        fs.writeFileSync(targetFile, JSON.stringify({ "1psid": psid, "1psidts": psidts }, null, 2), "utf-8");
-        console.log("[modeldock] 自動同步 gemini_cookies.json 成功！");
-        logEvent("INFO", "SYNC", "Gemini Cookie 已自動同步（背景擷取）", { source: "modeldock-auto" });
+      let currentRaw = "";
+      try { if (fs.existsSync(targetFile)) currentRaw = fs.readFileSync(targetFile, "utf-8"); } catch {}
+      const nextRaw = JSON.stringify(nextPayload, null, 2);
+      if (currentRaw !== nextRaw) {
+        fs.writeFileSync(targetFile, nextRaw, "utf-8");
+        console.log(`[modeldock] 自動同步 gemini_cookies.json 成功！(cookies=${cookieList.length})`);
+        logEvent("INFO", "SYNC", `Gemini Cookie 已自動同步（背景擷取，共 ${cookieList.length} 筆）`, {
+          source: "modeldock-auto",
+          cookie_count: cookieList.length,
+        });
       }
-      pushToPythonBridge("/v1/cookies", { "1psid": psid, "1psidts": psidts, source: "modeldock-auto" });
-      return { ok: true, synced: true, psid: !!psid, psidts: !!psidts };
+      pushToPythonBridge("/v1/cookies", { ...nextPayload, source: "modeldock-auto" });
+      return { ok: true, synced: true, psid: !!psid, psidts: !!psidts, cookieCount: cookieList.length };
     }
   } catch (err) {
     console.error("[modeldock] 擷取 Gemini Cookie 錯誤:", err);

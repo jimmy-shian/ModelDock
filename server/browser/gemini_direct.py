@@ -26,16 +26,174 @@ import codecs
 import logging
 from pathlib import Path
 from typing import AsyncGenerator, Optional, Dict, Any, List
+from urllib.parse import urlparse
 
+from curl_cffi.requests import Cookies as CurlCookies
 from gemini_webapi import GeminiClient
 from gemini_webapi.exceptions import GeminiError, APIError, TimeoutError
 from gemini_webapi.constants import AccountStatus
+from gemini_webapi.utils import clear_cookies_cache
 
 from server.bridge.ws_hub import TurnEvent
 from server.config import get_workspace_root
 from server.browser.cookie_auto import auto_fetch_cookies
 
 LOGGER = logging.getLogger("webchat2local.bridge")
+
+_INITIALIZING_CLIENTS: set[int] = set()
+_GUARDS_INSTALLED: bool = False
+_CLIENT_INIT_TIMEOUT_SEC: float = float(os.getenv("GEMINI_INIT_TIMEOUT_SEC", "45") or 45)
+
+
+def _install_gemini_webapi_guards() -> None:
+    """
+    Idempotent runtime compatibility guards for gemini-webapi 2.1.1 bugs (#381/#382):
+      1. Reject GET /app responses redirected away from gemini.google.com (e.g.
+         accounts.google.com sign-in page, whose HTML still carries SNlM0e/cfb2h).
+      2. Prevent recursive self-deadlock on GeminiClient._lock when _init_rpc()
+         hits a non-200 _batch_execute response and @running retries client.init().
+    Safe no-op when upstream already provides _initializing.
+    """
+    global _GUARDS_INSTALLED
+    if _GUARDS_INSTALLED:
+        return
+
+    try:
+        import importlib
+        _gat_mod = importlib.import_module("gemini_webapi.utils.get_access_token")
+
+        orig_extract = _gat_mod._extract_payload
+        if not getattr(orig_extract, "_w2l_guarded", False):
+            def _guarded_extract_payload(response):
+                host = (urlparse(str(getattr(response, "url", "") or "")).hostname or "").lower()
+                if host and host != "gemini.google.com":
+                    LOGGER.debug(
+                        "🛡️ [DIRECT] 拒絕非 gemini.google.com 回應（重導向至 %s）", host
+                    )
+                    return None
+                payload = orig_extract(response)
+                if payload and isinstance(payload[1], str) and payload[1].startswith("boq_identity"):
+                    LOGGER.debug("🛡️ [DIRECT] 拒絕登入頁 build_label (%s)", payload[1])
+                    return None
+                return payload
+
+            _guarded_extract_payload._w2l_guarded = True
+            _gat_mod._extract_payload = _guarded_extract_payload
+    except Exception as e:
+        LOGGER.debug("安裝 get_access_token 守衛略過: %s", e)
+
+    try:
+        orig_init = GeminiClient.init
+        orig_batch = GeminiClient._batch_execute
+        raw_batch = getattr(orig_batch, "__wrapped__", None)
+
+        if (
+            raw_batch is not None
+            and "_initializing" not in getattr(GeminiClient, "__slots__", ())
+            and not getattr(orig_init, "_w2l_guarded", False)
+        ):
+            async def _guarded_init(self, *args, **kwargs):
+                cid = id(self)
+                _INITIALIZING_CLIENTS.add(cid)
+                try:
+                    return await orig_init(self, *args, **kwargs)
+                finally:
+                    _INITIALIZING_CLIENTS.discard(cid)
+
+            async def _guarded_batch_execute(self, *args, **kwargs):
+                if id(self) in _INITIALIZING_CLIENTS:
+                    kwargs["close_on_error"] = False
+                    return await raw_batch(self, *args, **kwargs)
+                return await orig_batch(self, *args, **kwargs)
+
+            _guarded_init._w2l_guarded = True
+            _guarded_batch_execute._w2l_guarded = True
+            GeminiClient.init = _guarded_init
+            GeminiClient._batch_execute = _guarded_batch_execute
+    except Exception as e:
+        LOGGER.debug("安裝 GeminiClient 防死鎖守衛略過: %s", e)
+
+    _GUARDS_INSTALLED = True
+
+
+def _is_allowed_cookie_domain(domain: str) -> bool:
+    d = (domain or "").strip().lstrip(".").lower()
+    if not d:
+        return True
+    if d == "accounts.google.com" or d.endswith(".accounts.google.com"):
+        return False
+    return d == "google.com" or d.endswith(".google.com")
+
+
+def _normalize_cookie_list(raw_cookies: Any) -> List[Dict[str, Any]]:
+    """
+    Normalize a list of domain-aware cookie dicts for storage & CurlCookies jar building.
+    Preserves exact domain/path/secure/expires so host cookies like gemini.google.com OSID
+    and .google.com SID/1PSID/1PSIDTS/1PSIDCC stay intact.
+    """
+    if not isinstance(raw_cookies, list):
+        return []
+    dedup: Dict[tuple, Dict[str, Any]] = {}
+    for item in raw_cookies:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", "") or "").strip()
+        value = str(item.get("value", "") or "").strip()
+        if not name or not value:
+            continue
+        domain = str(item.get("domain", ".google.com") or ".google.com").strip()
+        if not _is_allowed_cookie_domain(domain):
+            continue
+        path = str(item.get("path", "/") or "/").strip() or "/"
+        secure = bool(item.get("secure", True))
+        exp = item.get("expires")
+        if exp is None:
+            exp = item.get("expirationDate")
+        entry: Dict[str, Any] = {
+            "name": name,
+            "value": value,
+            "domain": domain,
+            "path": path,
+            "secure": secure,
+        }
+        if isinstance(exp, (int, float)) and exp > 0:
+            entry["expires"] = exp
+        dedup[(domain, path, name)] = entry
+    return [dedup[k] for k in sorted(dedup.keys())]
+
+
+def cookies_signature(data: Dict[str, Any]) -> tuple:
+    """Stable comparable signature for (1psid, 1psidts, normalized cookie list)."""
+    norm = _normalize_cookie_list(data.get("cookies"))
+    return (
+        str(data.get("1psid", "") or "").strip(),
+        str(data.get("1psidts", "") or "").strip(),
+        tuple((c["domain"], c["path"], c["name"], c["value"]) for c in norm),
+    )
+
+
+def _build_cookie_jar(cookies_data: Dict[str, Any]) -> CurlCookies:
+    """Build a domain-accurate curl_cffi Cookies jar from stored Gemini cookies."""
+    jar = CurlCookies()
+    now = time.time()
+    for c in _normalize_cookie_list(cookies_data.get("cookies")):
+        exp = c.get("expires")
+        if isinstance(exp, (int, float)) and exp < now:
+            continue
+        jar.set(
+            c["name"],
+            c["value"],
+            domain=c["domain"],
+            path=c["path"],
+            secure=c.get("secure", True),
+        )
+    psid = str(cookies_data.get("1psid", "") or "").strip()
+    psidts = str(cookies_data.get("1psidts", "") or "").strip()
+    if psid:
+        jar.set("__Secure-1PSID", psid, domain=".google.com", path="/", secure=True)
+    if psidts:
+        jar.set("__Secure-1PSIDTS", psidts, domain=".google.com", path="/", secure=True)
+    return jar
 
 
 class GeminiDirectError(Exception):
@@ -46,13 +204,24 @@ def _cookie_file() -> Path:
     return get_workspace_root() / "gemini_cookies.json"
 
 
-def save_cookies(one_psid: str, one_psidts: str = "") -> bool:
+def save_cookies(
+    one_psid: str,
+    one_psidts: str = "",
+    cookies: Optional[List[Dict[str, Any]]] = None,
+) -> bool:
     """
-    Persist the __Secure-1PSID / __Secure-1PSIDTS cookies to gemini_cookies.json.
+    Persist the __Secure-1PSID / __Secure-1PSIDTS cookies (and optional full
+    domain-accurate cookie list) to gemini_cookies.json.
     Returns True on success.
     """
     try:
-        data = {"1psid": one_psid.strip(), "1psidts": one_psidts.strip()}
+        data: Dict[str, Any] = {
+            "1psid": one_psid.strip(),
+            "1psidts": one_psidts.strip(),
+        }
+        norm_cookies = _normalize_cookie_list(cookies)
+        if norm_cookies:
+            data["cookies"] = norm_cookies
         _cookie_file().write_text(
             json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
         )
@@ -63,7 +232,8 @@ def save_cookies(one_psid: str, one_psidts: str = "") -> bool:
 
 def update_psidts(new_psidts: str, client_psid: str = "") -> bool:
     """
-    Persist a rotated __Secure-1PSIDTS value while keeping the stored 1PSID.
+    Persist a rotated __Secure-1PSIDTS value while keeping the stored 1PSID
+    and any domain-accurate cookies list.
 
     Lineage guard: when the caller's session PSID is known, only write if the
     file holds the SAME 1PSID. This prevents one stale in-memory session from
@@ -84,25 +254,53 @@ def update_psidts(new_psidts: str, client_psid: str = "") -> bool:
             "🛡️ [DIRECT] 拒絕寫入 PSIDTS：來源會話與檔案會話不同（防混種寫入）。"
         )
         return False
-    return save_cookies(psid, new_psidts)
+    existing_cookies = _normalize_cookie_list(current.get("cookies"))
+    if existing_cookies:
+        updated_in_list = False
+        for item in existing_cookies:
+            if item["name"] == "__Secure-1PSIDTS":
+                item["value"] = new_psidts
+                updated_in_list = True
+        if not updated_in_list:
+            existing_cookies.append(
+                {
+                    "name": "__Secure-1PSIDTS",
+                    "value": new_psidts,
+                    "domain": ".google.com",
+                    "path": "/",
+                    "secure": True,
+                }
+            )
+    return save_cookies(psid, new_psidts, cookies=existing_cookies or None)
 
 
-def load_cookies() -> Dict[str, str]:
+def load_cookies() -> Dict[str, Any]:
     """
-    Resolve the __Secure-1PSID / __Secure-1PSIDTS cookies.
+    Resolve the __Secure-1PSID / __Secure-1PSIDTS cookies (and optional full
+    domain-accurate cookie list).
     """
     one_psid = os.getenv("GEMINI_1PSID", "")
     one_psidts = os.getenv("GEMINI_1PSIDTS", "")
+    cookie_list: List[Dict[str, Any]] = []
 
     if not one_psid:
         path = _cookie_file()
         if path.exists():
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
-                one_psid = str(data.get("1psid", "") or data.get("__Secure-1PSID", ""))
-                one_psidts = str(data.get("1psidts", "") or data.get("__Secure-1PSIDTS", ""))
+                if isinstance(data, list):
+                    cookie_list = _normalize_cookie_list(data)
+                elif isinstance(data, dict):
+                    one_psid = str(data.get("1psid", "") or data.get("__Secure-1PSID", ""))
+                    one_psidts = str(data.get("1psidts", "") or data.get("__Secure-1PSIDTS", ""))
+                    cookie_list = _normalize_cookie_list(data.get("cookies"))
+                if cookie_list and not one_psid:
+                    one_psid = next((c["value"] for c in cookie_list if c["name"] == "__Secure-1PSID"), "")
+                if cookie_list and not one_psidts:
+                    one_psidts = next((c["value"] for c in cookie_list if c["name"] == "__Secure-1PSIDTS"), "")
             except (json.JSONDecodeError, OSError):
                 one_psid = ""
+                cookie_list = []
 
     if not one_psid:
         try:
@@ -112,7 +310,11 @@ def load_cookies() -> Dict[str, str]:
         except Exception:
             one_psid = ""
 
-    return {"1psid": one_psid.strip(), "1psidts": one_psidts.strip()}
+    return {
+        "1psid": one_psid.strip(),
+        "1psidts": one_psidts.strip(),
+        "cookies": cookie_list,
+    }
 
 
 def is_configured() -> bool:
@@ -132,10 +334,16 @@ class DirectGeminiEngine:
         self._client_lock = asyncio.Lock()
         self._sessions: Dict[str, Any] = {}  # session_id -> ChatSession
         self._session_last_active: Dict[str, float] = {}
+        self._clear_cache_before_init: bool = False
 
     async def get_client(self) -> GeminiClient:
+        _install_gemini_webapi_guards()
         async with self._client_lock:
-            if self._client is not None and getattr(self._client, "healthy", True):
+            if (
+                self._client is not None
+                and getattr(self._client, "_running", True)
+                and getattr(self._client, "healthy", True)
+            ):
                 return self._client
 
             cookies = load_cookies()
@@ -148,7 +356,7 @@ class DirectGeminiEngine:
                         psid = next((c["value"] for c in c_list if c.get("name") == "__Secure-1PSID"), "")
                         psidts = next((c["value"] for c in c_list if c.get("name") == "__Secure-1PSIDTS"), "")
                         if psid:
-                            save_cookies(psid, psidts)
+                            save_cookies(psid, psidts, cookies=c_list)
                             cookies = load_cookies()
                             LOGGER.info("🔑 [DIRECT] 成功從 %s 自動提取 Gemini Cookies！", b_name.capitalize())
                             break
@@ -158,21 +366,74 @@ class DirectGeminiEngine:
             if not cookies.get("1psid"):
                 raise GeminiDirectError(
                     "未設定 Gemini Cookie (__Secure-1PSID)。\n"
-                    "請在 Chrome 或 Edge 開啟 gemini.google.com 登入，並在擴充套件點擊「自動抓取 Cookie」，\n"
+                    "請在 ModelDock 的 Gemini 分頁登入，或透過擴充套件同步 Cookie，\n"
                     "或手動建立 gemini_cookies.json：{\"1psid\": \"...\", \"1psidts\": \"...\"}。"
                 )
 
-            LOGGER.info("🔑 [DIRECT] 初始化 GeminiClient (使用 gemini_webapi)...")
+            cookie_jar = _build_cookie_jar(cookies)
+            # When full domain-accurate cookies are supplied (e.g. Electron harvest with OSID/SID),
+            # clear gemini_webapi's temp cache first so an older/incomplete cache entry with the same
+            # 1PSID+1PSIDTS cannot shadow base_jar and cause get_access_token to skip Base Cookies.
+            if self._clear_cache_before_init or bool(cookies.get("cookies")):
+                clear_cookies_cache(cookie_jar)
+                self._clear_cache_before_init = False
+
+            LOGGER.info(
+                "🔑 [DIRECT] 初始化 GeminiClient (使用 gemini_webapi | cookies=%d)...",
+                len(cookies.get("cookies") or []) or (2 if cookies.get("1psidts") else 1),
+            )
             client = GeminiClient(
                 cookies["1psid"],
                 cookies.get("1psidts", ""),
-                auto_refresh=True,
             )
+            # Supply domain-accurate cookie jar (preserves gemini.google.com OSID + .google.com SID/PSID)
+            client._cookies = cookie_jar
 
             try:
-                await client.init(timeout=180, auto_refresh=True, watchdog_timeout=180)
+                await asyncio.wait_for(
+                    client.init(timeout=180, auto_refresh=True, watchdog_timeout=180),
+                    timeout=_CLIENT_INIT_TIMEOUT_SEC,
+                )
+            except asyncio.TimeoutError as e:
+                LOGGER.error("❌ [DIRECT] GeminiClient 初始化逾時 (%.0fs)", _CLIENT_INIT_TIMEOUT_SEC)
+                try:
+                    await client.close()
+                except Exception:
+                    pass
+                clear_cookies_cache(cookie_jar)
+                raise GeminiDirectError(
+                    f"GeminiClient 初始化逾時（{_CLIENT_INIT_TIMEOUT_SEC:.0f}s）。"
+                    "請檢查網路連線或在 ModelDock 的 Gemini 分頁重新登入。"
+                ) from e
             except Exception as e:
-                LOGGER.warning("⚠️ [DIRECT] GeminiClient 初始化警告: %s", e)
+                LOGGER.error("❌ [DIRECT] GeminiClient 初始化失敗: %s", e)
+                try:
+                    await client.close()
+                except Exception:
+                    pass
+                clear_cookies_cache(cookie_jar)
+                raise GeminiDirectError(
+                    f"GeminiClient 初始化失敗（{e}）。"
+                    "若 Cookie 已過期或被導向登入頁，請在 ModelDock 的 Gemini 分頁重新登入後重試。"
+                ) from e
+
+            cookie_source = getattr(client, "_cookie_source", "")
+            account_status = getattr(client, "account_status", AccountStatus.AVAILABLE)
+            if cookie_source == "Guest" or account_status == AccountStatus.UNAUTHENTICATED:
+                LOGGER.error(
+                    "❌ [DIRECT] Gemini 認證失敗（source=%s, status=%s），已清除快取。",
+                    cookie_source,
+                    getattr(account_status, "name", account_status),
+                )
+                try:
+                    await client.close()
+                except Exception:
+                    pass
+                clear_cookies_cache(cookie_jar)
+                raise GeminiDirectError(
+                    "Gemini Cookie 已失效或未通過驗證（退回 Guest / UNAUTHENTICATED）。"
+                    "請在 ModelDock 的 Gemini 分頁重新登入以更新完整 Cookie。"
+                )
 
             # Auto persist rotated cookies if updated (same-session lineage only)
             if client.cookies.get("__Secure-1PSIDTS") and client.cookies.get("__Secure-1PSIDTS") != cookies.get("1psidts"):
@@ -181,6 +442,11 @@ class DirectGeminiEngine:
                     client_psid=str(client.cookies.get("__Secure-1PSID", "") or cookies.get("1psid", "")),
                 )
 
+            LOGGER.info(
+                "✅ [DIRECT] GeminiClient 初始化成功 (source=%s | models=%d)",
+                cookie_source or "unknown",
+                len(client.list_models()) if hasattr(client, "list_models") else 0,
+            )
             self._client = client
             return self._client
 
@@ -193,6 +459,9 @@ class DirectGeminiEngine:
                 except Exception:
                     pass
                 self._client = None
+            self._clear_cache_before_init = True
+            self._sessions.clear()
+            self._session_last_active.clear()
             LOGGER.info("🔄 [DIRECT] GeminiClient 已重載。")
 
 
